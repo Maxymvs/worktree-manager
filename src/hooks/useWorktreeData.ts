@@ -1,5 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '@/lib/api';
+import {
+  getCachedPullRequests,
+  getCachedJiraIssue,
+  getCachedRemoteInfo,
+  invalidateIntegrationCache,
+} from '@/lib/integration-cache';
 import type { IDEPreset } from '@/types';
 import type { WorktreeWithIntegrations, ProjectWithIntegrations } from '@/components/worktree/types';
 
@@ -25,8 +31,11 @@ interface UseWorktreeDataResult {
  * hydrates GitHub PR and Jira issue info in the background.
  *
  * `reload` re-runs the full load (used by the refresh button and after
- * mutations). Integration fetching lives in one bounded function
- * (`loadIntegrationData`) so a follow-up change can add caching there.
+ * mutations) and first invalidates the integration cache so it always
+ * re-fetches fresh PR/Jira data. GitHub PR, Jira, and remote-info lookups go
+ * through `@/lib/integration-cache`, which dedups in-flight requests and serves
+ * short-lived (5 min) cached values — collapsing the inline + background
+ * double-fetch into a single backend call per key.
  */
 export function useWorktreeData({
   expandedProjects,
@@ -57,13 +66,13 @@ export function useWorktreeData({
     jiraConfig: { host?: string; email?: string } | null
   ) => {
     for (const project of projectsWithWorktrees) {
-      const remoteInfo = await api.getGitHubRemoteInfo(project.repoPath, githubConfig?.host).catch(() => null);
+      const remoteInfo = await getCachedRemoteInfo(project.repoPath, githubConfig?.host).catch(() => null);
 
       for (const worktree of project.worktrees) {
         // Load Jira info if configured and issue number exists
         if (jiraConfig?.host && worktree.issueNumber) {
           console.log('[Jira Debug] Fetching issue:', worktree.issueNumber, 'host:', jiraConfig.host);
-          api.fetchJiraIssue(worktree.issueNumber)
+          getCachedJiraIssue(worktree.issueNumber)
             .then(jiraInfo => {
               console.log('[Jira Debug] Result for', worktree.issueNumber, ':', jiraInfo);
               if (jiraInfo) {
@@ -77,7 +86,7 @@ export function useWorktreeData({
 
         // Load PR info if GitHub configured
         if (githubConfig?.id && remoteInfo && !worktree.isMain) {
-          api.fetchPullRequests(remoteInfo.owner, remoteInfo.repo, worktree.branch)
+          getCachedPullRequests(remoteInfo.owner, remoteInfo.repo, worktree.branch)
             .then(prs => {
               if (prs.length > 0) {
                 updateWorktree(project.repoPath, worktree.path, { prInfo: prs[0] });
@@ -91,8 +100,13 @@ export function useWorktreeData({
     }
   }, [updateWorktree]);
 
-  const loadData = async () => {
+  const loadData = async (opts?: { forceFresh?: boolean }) => {
     try {
+      // Explicit refreshes drop all cached integration data so they always
+      // re-fetch; the initial mount load keeps any warm cache.
+      if (opts?.forceFresh) {
+        invalidateIntegrationCache();
+      }
       setLoading(true);
       const [settingsData, projectsData, githubConfig, jiraConfig] = await Promise.all([
         api.getSettings(),
@@ -111,7 +125,7 @@ export function useWorktreeData({
         projectsData.map(async (p) => {
           try {
             const worktrees = await api.getWorktrees(p.repo_path);
-            const remoteInfo = await api.getGitHubRemoteInfo(p.repo_path, githubConfig?.host).catch(() => null);
+            const remoteInfo = await getCachedRemoteInfo(p.repo_path, githubConfig?.host).catch(() => null);
 
             // Load memos only (local data)
             const worktreesWithMemos: WorktreeWithIntegrations[] = await Promise.all(
@@ -136,7 +150,7 @@ export function useWorktreeData({
                 // Load Jira info if configured and issue number exists
                 if (jiraConfig?.host && result.issueNumber) {
                   try {
-                    const jiraInfo = await api.fetchJiraIssue(result.issueNumber);
+                    const jiraInfo = await getCachedJiraIssue(result.issueNumber);
                     if (jiraInfo) {
                       result.jiraInfo = jiraInfo;
                     }
@@ -148,7 +162,7 @@ export function useWorktreeData({
                 // Load PR info if GitHub configured
                 if (githubConfig?.id && remoteInfo && !w.is_main) {
                   try {
-                    const prs = await api.fetchPullRequests(remoteInfo.owner, remoteInfo.repo, w.branch);
+                    const prs = await getCachedPullRequests(remoteInfo.owner, remoteInfo.repo, w.branch);
                     if (prs.length > 0) {
                       // Get the most recent/relevant PR
                       result.prInfo = prs[0];
@@ -215,6 +229,6 @@ export function useWorktreeData({
     hasGitHub,
     hasJira,
     jiraHost,
-    reload: loadData,
+    reload: () => loadData({ forceFresh: true }),
   };
 }
