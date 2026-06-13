@@ -7,14 +7,13 @@ allowed-tools: Bash(./.claude/skills/bump/bump.sh:*)
 
 # Version Bump Skill
 
-Updates version, builds signed app, updates Homebrew cask, and creates a single commit.
+Updates version, builds signed app, and creates a single commit.
 
 ## Prerequisites
 
 - Git status must be clean
 - Environment variables configured:
   - `APPLE_SIGNING_IDENTITY` - Developer ID certificate
-  - `TAURI_SIGNING_PRIVATE_KEY` - Update signing key
   - (Optional) `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` - For notarization
 
 ## Usage
@@ -32,12 +31,9 @@ Updates version, builds signed app, updates Homebrew cask, and creates a single 
    - `package.json`
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
-   - `grovr.cask.rb` (version)
 4. Builds signed Tauri app
 5. Verifies code signature
-6. Generates `latest.json` for auto-update
-7. Updates `grovr.cask.rb` with SHA-256
-8. Creates commit: `chore: bump version to X.Y.Z`
+6. Creates commit: `chore: bump version to X.Y.Z`
 
 ## Exit codes
 

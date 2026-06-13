@@ -75,9 +75,6 @@ sed -i '' "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$VERSION\"/" src-t
 echo "  Updating src-tauri/Cargo.toml..."
 sed -i '' "s/^version = \"$CURRENT_VERSION\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
 
-echo "  Updating grovr.cask.rb version..."
-sed -i '' "s/version \".*\"/version \"$VERSION\"/" grovr.cask.rb
-
 echo -e "${GREEN}✓${NC} Version updated to $VERSION"
 
 # === Step 2: Check build environment ===
@@ -88,9 +85,6 @@ MISSING=""
 if [[ -z "$APPLE_SIGNING_IDENTITY" ]]; then
   MISSING="$MISSING  - APPLE_SIGNING_IDENTITY\n"
 fi
-if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
-  MISSING="$MISSING  - TAURI_SIGNING_PRIVATE_KEY\n"
-fi
 
 if [[ -n "$MISSING" ]]; then
   echo -e "${RED}ERROR: Missing required environment variables:${NC}"
@@ -100,7 +94,6 @@ if [[ -n "$MISSING" ]]; then
 fi
 
 echo -e "${GREEN}✓${NC} APPLE_SIGNING_IDENTITY set"
-echo -e "${GREEN}✓${NC} TAURI_SIGNING_PRIVATE_KEY set"
 
 # Check optional notarization credentials
 if [[ -z "$APPLE_ID" || -z "$APPLE_PASSWORD" || -z "$APPLE_TEAM_ID" ]]; then
@@ -138,52 +131,11 @@ else
   exit 4
 fi
 
-# === Step 5: Generate latest.json ===
-echo ""
-echo "Generating latest.json..."
-
-SIGNATURE=$(cat src-tauri/target/release/bundle/macos/Grovr.app.tar.gz.sig)
-PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-# Detect architecture
-ARCH=$(uname -m)
-if [[ "$ARCH" == "arm64" ]]; then
-  PLATFORM="darwin-aarch64"
-else
-  PLATFORM="darwin-x86_64"
-fi
-
-cat > src-tauri/target/release/bundle/latest.json << EOF
-{
-  "version": "$VERSION",
-  "notes": "See release notes on GitHub",
-  "pub_date": "$PUB_DATE",
-  "platforms": {
-    "$PLATFORM": {
-      "signature": "$SIGNATURE",
-      "url": "https://github.com/j1king/grovr/releases/download/v$VERSION/Grovr.app.tar.gz"
-    }
-  }
-}
-EOF
-
-echo -e "${GREEN}✓${NC} Created latest.json"
-
-# === Step 6: Update cask sha256 ===
-echo ""
-echo "Updating cask sha256..."
-
-DMG_FILE=$(ls src-tauri/target/release/bundle/dmg/Grovr_*.dmg 2>/dev/null | head -1)
-SHA256=$(shasum -a 256 "$DMG_FILE" | cut -d' ' -f1)
-sed -i '' "s/sha256 \".*\"/sha256 \"$SHA256\"/" grovr.cask.rb
-
-echo -e "${GREEN}✓${NC} Cask sha256 updated"
-
-# === Step 7: Commit all changes ===
+# === Step 5: Commit all changes ===
 echo ""
 echo "Creating commit..."
 
-git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml grovr.cask.rb
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
 git commit -m "chore: bump version to $VERSION"
 
 # === Summary ===
@@ -191,11 +143,8 @@ echo ""
 echo -e "${GREEN}=== Bump & Build Complete ===${NC}"
 echo ""
 echo "Version: $VERSION"
-echo "Platform: $PLATFORM"
 echo ""
 echo "Artifacts:"
 ls -lh src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null || echo "  (no DMG found)"
-ls -lh src-tauri/target/release/bundle/macos/*.tar.gz 2>/dev/null || echo "  (no tar.gz found)"
-ls -lh src-tauri/target/release/bundle/latest.json 2>/dev/null || echo "  (no latest.json found)"
 echo ""
 echo "Next step: Run /release to publish to GitHub"

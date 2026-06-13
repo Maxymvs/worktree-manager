@@ -82,7 +82,8 @@ VERSION=$(echo "$LAST_COMMIT" | sed 's/chore: bump version to //')
 echo -e "${GREEN}✓${NC} Version bump found: $VERSION"
 
 # Check 2: Build artifacts should exist
-if [[ ! -f "src-tauri/target/release/bundle/latest.json" ]]; then
+DMG_CHECK=$(ls src-tauri/target/release/bundle/dmg/Grovr_*.dmg 2>/dev/null | head -1)
+if [[ -z "$DMG_CHECK" ]]; then
   echo -e "${RED}✗ Build artifacts not found${NC}"
   echo ""
   echo "Run /build first"
@@ -90,14 +91,12 @@ if [[ ! -f "src-tauri/target/release/bundle/latest.json" ]]; then
 fi
 echo -e "${GREEN}✓${NC} Build artifacts found"
 
-# Check 3: Version in artifacts matches committed version
+# Check 3: Committed version matches DMG filename version
 COMMITTED_VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: "\(.*\)".*/\1/')
-BUILT_VERSION=$(grep '"version"' src-tauri/target/release/bundle/latest.json | sed 's/.*: "\(.*\)".*/\1/')
-
-if [[ "$COMMITTED_VERSION" != "$BUILT_VERSION" ]]; then
+if [[ "$DMG_CHECK" != *"_${COMMITTED_VERSION}_"* ]]; then
   echo -e "${RED}✗ Version mismatch${NC}"
   echo "  Committed: $COMMITTED_VERSION"
-  echo "  Built: $BUILT_VERSION"
+  echo "  DMG: $(basename "$DMG_CHECK")"
   echo ""
   echo "Run /build again"
   exit 3
@@ -115,14 +114,10 @@ fi
 
 # Find artifacts
 DMG_FILE=$(ls src-tauri/target/release/bundle/dmg/Grovr_*.dmg 2>/dev/null | head -1)
-TAR_FILE="src-tauri/target/release/bundle/macos/Grovr.app.tar.gz"
-LATEST_FILE="src-tauri/target/release/bundle/latest.json"
 
 echo ""
 echo "Artifacts to upload:"
 echo "  - $(basename "$DMG_FILE")"
-echo "  - Grovr.app.tar.gz"
-echo "  - latest.json"
 
 # If check mode, stop here
 if [[ "$MODE" == "check" ]]; then
@@ -157,9 +152,7 @@ echo "Creating GitHub release..."
 gh release create "v$VERSION" \
   --title "v$VERSION" \
   --notes "$NOTES" \
-  "$DMG_FILE" \
-  "$TAR_FILE" \
-  "$LATEST_FILE"
+  "$DMG_FILE"
 
 # Verify
 echo ""
