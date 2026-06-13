@@ -63,7 +63,7 @@ if [[ -n "$NOTES_FILE" ]]; then
   NOTES=$(cat "$NOTES_FILE")
 fi
 
-echo -e "${BLUE}=== Grovr Release ===${NC}"
+echo -e "${BLUE}=== Worktree Manager Release ===${NC}"
 echo ""
 
 # Check 1: Last commit should be version bump
@@ -82,7 +82,7 @@ VERSION=$(echo "$LAST_COMMIT" | sed 's/chore: bump version to //')
 echo -e "${GREEN}✓${NC} Version bump found: $VERSION"
 
 # Check 2: Build artifacts should exist
-DMG_CHECK=$(ls src-tauri/target/release/bundle/dmg/Grovr_*.dmg 2>/dev/null | head -1)
+DMG_CHECK=$(ls src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
 if [[ -z "$DMG_CHECK" ]]; then
   echo -e "${RED}✗ Build artifacts not found${NC}"
   echo ""
@@ -113,7 +113,7 @@ if git rev-parse "v$VERSION" >/dev/null 2>&1; then
 fi
 
 # Find artifacts
-DMG_FILE=$(ls src-tauri/target/release/bundle/dmg/Grovr_*.dmg 2>/dev/null | head -1)
+DMG_FILE=$(ls src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
 
 echo ""
 echo "Artifacts to upload:"

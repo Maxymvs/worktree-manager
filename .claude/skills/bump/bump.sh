@@ -54,7 +54,7 @@ if [[ "$BRANCH" != "main" ]]; then
   fi
 fi
 
-echo -e "${BLUE}=== Grovr Bump & Build ===${NC}"
+echo -e "${BLUE}=== Worktree Manager Bump & Build ===${NC}"
 echo ""
 
 # Get current version
@@ -120,7 +120,7 @@ pnpm tauri build
 # === Step 4: Verify code signature ===
 echo ""
 echo "Verifying code signature..."
-SIGNATURE_INFO=$(codesign -dv --verbose=2 src-tauri/target/release/bundle/macos/Grovr.app 2>&1 || true)
+SIGNATURE_INFO=$(codesign -dv --verbose=2 "$(ls -d src-tauri/target/release/bundle/macos/*.app | head -1)" 2>&1 || true)
 
 if echo "$SIGNATURE_INFO" | grep -q "Authority=Developer ID"; then
   echo -e "${GREEN}✓${NC} Code signature verified"

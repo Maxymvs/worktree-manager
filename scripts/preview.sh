@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Grovr Desktop Preview Script
+# Worktree Manager Preview Script
 #
 # Sets up an isolated test environment per worktree and runs the Tauri app.
 # Multiple worktrees can run preview simultaneously without conflicts.
@@ -98,7 +98,7 @@ cmd_start() {
 
     echo ""
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║              Grovr Desktop Preview                           ║"
+    echo "║              Worktree Manager Preview                        ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
     print_status "Worktree: ${YELLOW}${WORKTREE_NAME}${NC}"
@@ -165,7 +165,7 @@ cmd_start() {
     # Wait for Rust build to complete (app window to open)
     print_status "Waiting for app to build and launch..."
     wait_count=0
-    while ! pgrep -f "Grovr.app" >/dev/null 2>&1; do
+    while ! pgrep -f "Worktree Manager" >/dev/null 2>&1; do
         sleep 2
         wait_count=$((wait_count + 1))
         # Show progress from log
@@ -191,7 +191,7 @@ cmd_start() {
         echo ""
         print_success "Preview started successfully!"
         echo ""
-        echo "  Window title: Grovr (${WORKTREE_NAME})"
+        echo "  Window title: Worktree Manager (${WORKTREE_NAME})"
         echo "  Dev server:   http://localhost:${VITE_PORT}"
         echo "  Log file:     ${LOG_FILE}"
         echo ""
@@ -267,7 +267,7 @@ cmd_stop() {
 cmd_status() {
     echo ""
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║              Grovr Desktop Preview Status                    ║"
+    echo "║              Worktree Manager Preview Status                 ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
     print_status "Worktree: ${YELLOW}${WORKTREE_NAME}${NC}"

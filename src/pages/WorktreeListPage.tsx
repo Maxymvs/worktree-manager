@@ -302,7 +302,7 @@ export function WorktreeListPage({
       <div data-tauri-drag-region className="titlebar">
         <div className="titlebar-spacer" />
         <span data-tauri-drag-region className="titlebar-title">
-          Grovr{import.meta.env.VITE_PREVIEW_WORKTREE && ` (${import.meta.env.VITE_PREVIEW_WORKTREE})`}
+          Worktree Manager{import.meta.env.VITE_PREVIEW_WORKTREE && ` (${import.meta.env.VITE_PREVIEW_WORKTREE})`}
         </span>
         <div className="flex items-center gap-1 no-drag">
           <button className="icon-button-sm" onClick={reload} title="Refresh">

@@ -37,7 +37,7 @@ fn setup_window_effects(app: &tauri::App) -> Result<(), Box<dyn std::error::Erro
 
     // Set dynamic window title for preview mode (worktree isolation)
     if let Ok(worktree) = std::env::var("GROVR_PREVIEW_WORKTREE") {
-        window.set_title(&format!("Grovr ({})", worktree))?;
+        window.set_title(&format!("Worktree Manager ({})", worktree))?;
     }
 
     #[cfg(target_os = "macos")]
