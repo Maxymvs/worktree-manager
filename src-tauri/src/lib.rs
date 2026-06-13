@@ -24,6 +24,7 @@ use commands::git::{
     delete_branch, rename_branch, git_fetch, git_pull, get_github_remote_info, open_ide,
     open_in_finder, open_terminal, copy_paths_to_worktree,
 };
+use commands::servers::get_running_servers;
 use commands::clipboard::read_clipboard_text;
 use commands::integrations::{
     get_github_config, set_github_config, remove_github_config, validate_github_token,
@@ -130,6 +131,8 @@ pub fn run() {
             remove_worktree,
             prune_worktrees,
             get_worktree_status,
+            // Servers
+            get_running_servers,
             // Git - Branches
             get_branches,
             get_current_branch,

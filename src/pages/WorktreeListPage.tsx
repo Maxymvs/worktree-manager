@@ -59,7 +59,9 @@ import * as api from '@/lib/api';
 import { UpdateBadge } from '@/components/ui/update-badge';
 import type { UpdateInfo } from '@/lib/updater';
 import type { Project, Worktree, IDEPreset } from '@/types';
-import type { PullRequestInfo, JiraIssueInfo } from '@/lib/api';
+import type { PullRequestInfo, JiraIssueInfo, RunningServer } from '@/lib/api';
+
+const SERVER_POLL_INTERVAL_MS = 4000;
 
 interface WorktreeListPageProps {
   onOpenSettings: () => void;
@@ -101,6 +103,10 @@ export function WorktreeListPage({
   const [hasGitHub, setHasGitHub] = useState(false);
   const [hasJira, setHasJira] = useState(false);
   const [jiraHost, setJiraHost] = useState<string | null>(null);
+
+  // Running dev servers, keyed by worktree path. Kept separate from `projects`
+  // so polling never disturbs the project/worktree tree.
+  const [serversByPath, setServersByPath] = useState<Record<string, RunningServer[]>>({});
 
   // IDE confirmation modal state
   const [ideModalOpen, setIdeModalOpen] = useState(false);
@@ -386,6 +392,8 @@ export function WorktreeListPage({
                   path: w.path,
                   branch: w.branch,
                   isMain: w.is_main,
+                  isDetached: w.is_detached,
+                  prunable: w.prunable,
                 };
 
                 // Load memo (local data)
@@ -465,6 +473,71 @@ export function WorktreeListPage({
   useEffect(() => {
     loadData();
   }, []);
+
+  // Flat list of all worktree paths, used as the polling input. Stable string
+  // key avoids re-subscribing the effect when project objects are recreated.
+  const allWorktreePaths = useMemo(
+    () => projects.flatMap((p) => p.worktrees.map((w) => w.path)),
+    [projects]
+  );
+  const worktreePathsKey = useMemo(
+    () => [...allWorktreePaths].sort().join('\n'),
+    [allWorktreePaths]
+  );
+
+  // Poll for running dev servers on a fixed interval. Pauses while the window is
+  // hidden, guards against overlapping in-flight calls, and only updates state
+  // when the serialized result actually changes (avoids 4s re-render churn).
+  useEffect(() => {
+    if (allWorktreePaths.length === 0) {
+      setServersByPath((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+      return;
+    }
+
+    let cancelled = false;
+    let inFlight = false;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const poll = async () => {
+      if (cancelled || inFlight) return;
+      if (document.visibilityState === 'hidden') return;
+      inFlight = true;
+      try {
+        const servers = await api.getRunningServers(allWorktreePaths);
+        if (cancelled) return;
+        const grouped: Record<string, RunningServer[]> = {};
+        for (const server of servers) {
+          (grouped[server.worktree_path] ??= []).push(server);
+        }
+        setServersByPath((prev) =>
+          JSON.stringify(prev) === JSON.stringify(grouped) ? prev : grouped
+        );
+      } catch (err) {
+        // Keep previous state on error (e.g. lsof unavailable).
+        console.error('Failed to poll running servers:', err);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        poll();
+      }
+    };
+
+    // Immediate first poll, then on an interval.
+    poll();
+    intervalId = setInterval(poll, SERVER_POLL_INTERVAL_MS);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [worktreePathsKey]);
 
   const toggleProject = (repoPath: string) => {
     const next = new Set(expandedProjects);
@@ -560,7 +633,9 @@ export function WorktreeListPage({
 
   const handleDeleteWorktree = (worktree: Worktree, repoPath: string) => {
     setDeleteModalData({ worktree, repoPath });
-    setDeleteBranchToo(true);
+    // For detached worktrees `branch` holds a SHA, not a real branch, so never
+    // offer to delete it.
+    setDeleteBranchToo(!worktree.isDetached);
     setDeleteModalOpen(true);
   };
 
@@ -612,6 +687,7 @@ export function WorktreeListPage({
   // Only show integration columns if there's actual fetched data
   const hasAnyGitHub = hasGitHub && allWorktrees.some((w) => w.prInfo);
   const hasAnyJira = hasJira && allWorktrees.some((w) => w.jiraInfo || w.issueNumber);
+  const hasAnyServers = allWorktrees.some((w) => (serversByPath[w.path]?.length ?? 0) > 0);
 
   return (
     <div className="h-full flex flex-col">
@@ -702,6 +778,8 @@ export function WorktreeListPage({
                   showDescription={hasAnyDescription}
                   showGitHub={hasAnyGitHub}
                   showJira={hasAnyJira}
+                  showServers={hasAnyServers}
+                  serversByPath={serversByPath}
                   jiraHost={jiraHost}
                   selectedPath={selectedPath}
                   searchQuery={searchQuery}
@@ -771,15 +849,17 @@ export function WorktreeListPage({
         loading={deleting}
         loadingLabel="Deleting..."
       >
-        <label className="flex items-center gap-2 mt-4 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={deleteBranchToo}
-            onChange={(e) => setDeleteBranchToo(e.target.checked)}
-            className="w-4 h-4 rounded border-input bg-background text-primary focus:ring-primary focus:ring-offset-0"
-          />
-          <span className="text-sm text-foreground">Also delete local branch</span>
-        </label>
+        {!deleteModalData?.worktree.isDetached && (
+          <label className="flex items-center gap-2 mt-4 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={deleteBranchToo}
+              onChange={(e) => setDeleteBranchToo(e.target.checked)}
+              className="w-4 h-4 rounded border-input bg-background text-primary focus:ring-primary focus:ring-offset-0"
+            />
+            <span className="text-sm text-foreground">Also delete local branch</span>
+          </label>
+        )}
       </ConfirmModal>
 
       {/* Force Delete Confirmation Modal */}
@@ -799,15 +879,17 @@ export function WorktreeListPage({
         loading={forceDeleting}
         loadingLabel="Deleting..."
       >
-        <label className="flex items-center gap-2 mt-4 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={deleteBranchToo}
-            onChange={(e) => setDeleteBranchToo(e.target.checked)}
-            className="w-4 h-4 rounded border-input bg-background text-primary focus:ring-primary focus:ring-offset-0"
-          />
-          <span className="text-sm text-foreground">Also delete local branch</span>
-        </label>
+        {!deleteModalData?.worktree.isDetached && (
+          <label className="flex items-center gap-2 mt-4 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={deleteBranchToo}
+              onChange={(e) => setDeleteBranchToo(e.target.checked)}
+              className="w-4 h-4 rounded border-input bg-background text-primary focus:ring-primary focus:ring-offset-0"
+            />
+            <span className="text-sm text-foreground">Also delete local branch</span>
+          </label>
+        )}
       </ConfirmModal>
 
       {/* Error Alert Modal */}
@@ -837,6 +919,8 @@ interface ProjectCardProps {
   showDescription: boolean;
   showGitHub: boolean;
   showJira: boolean;
+  showServers: boolean;
+  serversByPath: Record<string, RunningServer[]>;
   selectedPath: string | null;
   searchQuery: string;
 }
@@ -882,6 +966,8 @@ function ProjectCard({
   showDescription,
   showGitHub,
   showJira,
+  showServers,
+  serversByPath,
   jiraHost,
   selectedPath,
   searchQuery,
@@ -955,6 +1041,7 @@ function ProjectCard({
             gridTemplateColumns: [
               'auto',
               showDescription ? 'minmax(0, 1fr)' : null,
+              showServers ? 'auto' : null,
               showGitHub ? '80px' : null,
               showJira ? '80px' : null,
               '44px',
@@ -978,6 +1065,8 @@ function ProjectCard({
                 showDescription={showDescription}
                 showGitHub={showGitHub}
                 showJira={showJira}
+                showServers={showServers}
+                servers={serversByPath[worktree.path] ?? []}
                 jiraHost={jiraHost}
                 isSelected={selectedPath === worktree.path}
               />
@@ -999,6 +1088,8 @@ interface WorktreeRowProps {
   showDescription: boolean;
   showGitHub: boolean;
   showJira: boolean;
+  showServers: boolean;
+  servers: RunningServer[];
   jiraHost: string | null;
   isSelected: boolean;
 }
@@ -1013,6 +1104,8 @@ function WorktreeRow({
   showDescription,
   showGitHub,
   showJira,
+  showServers,
+  servers,
   jiraHost,
   isSelected,
 }: WorktreeRowProps) {
@@ -1096,6 +1189,20 @@ function WorktreeRow({
     }
   };
 
+  // Deduped, ascending ports for this worktree's running servers, plus a lookup
+  // from port -> server (for pid/name in the badge tooltip).
+  const serverPorts = useMemo(() => {
+    const byPort = new Map<number, RunningServer>();
+    for (const s of servers) {
+      if (!byPort.has(s.port)) byPort.set(s.port, s);
+    }
+    return [...byPort.values()].sort((a, b) => a.port - b.port);
+  }, [servers]);
+
+  const MAX_VISIBLE_PORTS = 3;
+  const visiblePorts = serverPorts.slice(0, MAX_VISIBLE_PORTS);
+  const overflowPorts = serverPorts.slice(MAX_VISIBLE_PORTS);
+
   return (
     <div
       className={`worktree-row ${isSelected ? 'worktree-row-selected' : ''}`}
@@ -1106,8 +1213,19 @@ function WorktreeRow({
       {/* Branch */}
       <div className="worktree-col-branch">
         <GitBranch size={14} className="worktree-branch-icon" />
-        <span className="worktree-branch-name">{worktree.branch}</span>
+        {worktree.isDetached ? (
+          <span className="worktree-branch-detached" title="Detached HEAD">
+            (detached @ {worktree.branch})
+          </span>
+        ) : (
+          <span className="worktree-branch-name">{worktree.branch}</span>
+        )}
         {worktree.isMain && <span className="worktree-main-badge">main</span>}
+        {worktree.prunable && (
+          <span className="worktree-prunable-badge" title="This worktree can be pruned">
+            prunable
+          </span>
+        )}
       </div>
 
       {/* Description - only show if any worktree has description */}
@@ -1116,6 +1234,38 @@ function WorktreeRow({
           <span className="worktree-description">
             {worktree.description}
           </span>
+        </div>
+      )}
+
+      {/* Running dev servers - port badges */}
+      {showServers && (
+        <div className="worktree-col-servers">
+          {serverPorts.length > 0 && (
+            <>
+              <span className="server-pulse-dot" aria-hidden="true" />
+              {visiblePorts.map((server) => (
+                <button
+                  key={server.port}
+                  className="integration-badge-link status-running"
+                  title={`${server.process_name} (pid ${server.pid}) — open http://localhost:${server.port}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openUrl(`http://localhost:${server.port}`);
+                  }}
+                >
+                  <span className="badge-text">:{server.port}</span>
+                </button>
+              ))}
+              {overflowPorts.length > 0 && (
+                <span
+                  className="integration-badge-link status-running"
+                  title={`Also: ${overflowPorts.map((s) => `:${s.port}`).join(', ')}`}
+                >
+                  <span className="badge-text">+{overflowPorts.length}</span>
+                </span>
+              )}
+            </>
+          )}
         </div>
       )}
 

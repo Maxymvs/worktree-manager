@@ -9,6 +9,10 @@ pub struct Worktree {
     pub branch: String,
     pub is_main: bool,
     pub is_bare: bool,
+    #[serde(default)]
+    pub is_detached: bool,
+    #[serde(default)]
+    pub prunable: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -41,45 +45,80 @@ pub fn get_worktrees(repo_path: String) -> Result<Vec<Worktree>, String> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut worktrees = Vec::new();
-    let mut current_path: Option<String> = None;
-    let mut current_branch: Option<String> = None;
-    let mut is_bare = false;
+    Ok(parse_worktree_list(&stdout))
+}
+
+/// Per-entry accumulator while parsing `git worktree list --porcelain` output.
+#[derive(Default)]
+struct WorktreeEntry {
+    path: Option<String>,
+    branch: Option<String>,
+    sha: Option<String>,
+    is_bare: bool,
+    is_detached: bool,
+    prunable: bool,
+}
+
+/// Pure parser for `git worktree list --porcelain` output.
+///
+/// Entries are separated by blank lines (or a new `worktree ` line). Recognized
+/// fields: `worktree <path>`, `branch refs/heads/<name>`, `HEAD <sha>`, `bare`,
+/// `detached`, `prunable <reason>`. Detached worktrees have no `branch` line, so
+/// their branch is set to the short (7-char) SHA to avoid blank rows.
+fn parse_worktree_list(stdout: &str) -> Vec<Worktree> {
+    let mut worktrees: Vec<Worktree> = Vec::new();
+    let mut current = WorktreeEntry::default();
+
+    // Flush the accumulated entry (if any) into the result list.
+    fn flush(worktrees: &mut Vec<Worktree>, entry: &mut WorktreeEntry) {
+        let Some(path) = entry.path.take() else {
+            *entry = WorktreeEntry::default();
+            return;
+        };
+
+        let mut branch = entry.branch.take().unwrap_or_default();
+        // Detached worktrees have no branch line; show the short SHA instead.
+        if branch.is_empty() && entry.is_detached {
+            if let Some(sha) = &entry.sha {
+                branch = sha.chars().take(7).collect();
+            }
+        }
+
+        worktrees.push(Worktree {
+            path,
+            branch,
+            is_main: worktrees.is_empty(),
+            is_bare: entry.is_bare,
+            is_detached: entry.is_detached,
+            prunable: entry.prunable,
+        });
+
+        *entry = WorktreeEntry::default();
+    }
 
     for line in stdout.lines() {
-        if line.starts_with("worktree ") {
-            // Save previous worktree if exists
-            if let Some(path) = current_path.take() {
-                worktrees.push(Worktree {
-                    path: path.clone(),
-                    branch: current_branch.take().unwrap_or_default(),
-                    is_main: worktrees.is_empty(),
-                    is_bare,
-                });
-                is_bare = false;
-            }
-            current_path = Some(line.strip_prefix("worktree ").unwrap().to_string());
-        } else if line.starts_with("branch ") {
-            let branch = line.strip_prefix("branch refs/heads/").unwrap_or(
-                line.strip_prefix("branch ").unwrap_or("")
-            );
-            current_branch = Some(branch.to_string());
+        if let Some(path) = line.strip_prefix("worktree ") {
+            // New entry begins; flush the previous one.
+            flush(&mut worktrees, &mut current);
+            current.path = Some(path.to_string());
+        } else if let Some(rest) = line.strip_prefix("branch ") {
+            let branch = rest.strip_prefix("refs/heads/").unwrap_or(rest);
+            current.branch = Some(branch.to_string());
+        } else if let Some(sha) = line.strip_prefix("HEAD ") {
+            current.sha = Some(sha.to_string());
         } else if line == "bare" {
-            is_bare = true;
+            current.is_bare = true;
+        } else if line == "detached" {
+            current.is_detached = true;
+        } else if line.starts_with("prunable") {
+            current.prunable = true;
         }
     }
 
-    // Don't forget the last one
-    if let Some(path) = current_path {
-        worktrees.push(Worktree {
-            path,
-            branch: current_branch.unwrap_or_default(),
-            is_main: worktrees.is_empty(),
-            is_bare,
-        });
-    }
+    // Flush the final entry.
+    flush(&mut worktrees, &mut current);
 
-    Ok(worktrees)
+    worktrees
 }
 
 #[tauri::command]
@@ -710,8 +749,8 @@ mod tests {
         assert!(worktrees[0].is_main);
     }
 
-    #[test]
-    fn test_create_and_get_worktree() {
+    #[tokio::test]
+    async fn test_create_and_get_worktree() {
         let (temp_dir, repo_path) = setup_test_repo();
         let worktree_path = temp_dir.path().join("worktrees/feature-test");
 
@@ -722,6 +761,7 @@ mod tests {
             "feature-test".to_string(),
             "main".to_string(),
         )
+        .await
         .expect("Failed to create worktree");
 
         // Verify worktree exists
@@ -733,8 +773,8 @@ mod tests {
         assert!(!feature_wt.unwrap().is_main);
     }
 
-    #[test]
-    fn test_create_worktree_existing_branch() {
+    #[tokio::test]
+    async fn test_create_worktree_existing_branch() {
         let (temp_dir, repo_path) = setup_test_repo();
 
         // Create a branch first
@@ -752,6 +792,7 @@ mod tests {
             worktree_path.to_string_lossy().to_string(),
             "existing-branch".to_string(),
         )
+        .await
         .expect("Failed to create worktree from existing branch");
 
         // Verify
@@ -762,8 +803,8 @@ mod tests {
         assert!(existing_wt.is_some());
     }
 
-    #[test]
-    fn test_remove_worktree() {
+    #[tokio::test]
+    async fn test_remove_worktree() {
         let (temp_dir, repo_path) = setup_test_repo();
         let worktree_path = temp_dir.path().join("worktrees/to-delete");
 
@@ -774,6 +815,7 @@ mod tests {
             "to-delete".to_string(),
             "main".to_string(),
         )
+        .await
         .expect("Failed to create worktree");
 
         // Verify it exists
@@ -788,6 +830,7 @@ mod tests {
             false,
             None,
         )
+        .await
         .expect("Failed to remove worktree");
 
         // Verify it's gone
@@ -795,8 +838,8 @@ mod tests {
         assert_eq!(worktrees.len(), 1);
     }
 
-    #[test]
-    fn test_remove_worktree_force() {
+    #[tokio::test]
+    async fn test_remove_worktree_force() {
         let (temp_dir, repo_path) = setup_test_repo();
         let worktree_path = temp_dir.path().join("worktrees/dirty-wt");
 
@@ -807,6 +850,7 @@ mod tests {
             "dirty-wt".to_string(),
             "main".to_string(),
         )
+        .await
         .expect("Failed to create worktree");
 
         // Make it dirty (uncommitted changes)
@@ -819,7 +863,8 @@ mod tests {
             false,
             false,
             None,
-        );
+        )
+        .await;
         assert!(result.is_err());
 
         // Remove with force - should succeed
@@ -830,6 +875,7 @@ mod tests {
             false,
             None,
         )
+        .await
         .expect("Failed to force remove worktree");
 
         // Verify it's gone
@@ -909,6 +955,98 @@ mod tests {
         let branches = get_branches(repo_path, false).expect("Failed to get branches");
         assert!(!branches.iter().any(|b| b.name == "old-name"));
         assert!(branches.iter().any(|b| b.name == "new-name"));
+    }
+
+    #[test]
+    fn test_parse_worktree_list_normal() {
+        let porcelain = "\
+worktree /home/user/repo
+HEAD abc1234567890abcdef
+branch refs/heads/main
+
+worktree /home/user/repo.worktrees/feature
+HEAD def4567890abcdef1234
+branch refs/heads/feature-x
+";
+        let worktrees = parse_worktree_list(porcelain);
+        assert_eq!(worktrees.len(), 2);
+
+        assert_eq!(worktrees[0].path, "/home/user/repo");
+        assert_eq!(worktrees[0].branch, "main");
+        assert!(worktrees[0].is_main);
+        assert!(!worktrees[0].is_bare);
+        assert!(!worktrees[0].is_detached);
+        assert!(!worktrees[0].prunable);
+
+        assert_eq!(worktrees[1].path, "/home/user/repo.worktrees/feature");
+        assert_eq!(worktrees[1].branch, "feature-x");
+        assert!(!worktrees[1].is_main);
+    }
+
+    #[test]
+    fn test_parse_worktree_list_bare() {
+        let porcelain = "\
+worktree /home/user/repo.git
+bare
+
+worktree /home/user/repo.worktrees/main
+HEAD abc1234567890abcdef
+branch refs/heads/main
+";
+        let worktrees = parse_worktree_list(porcelain);
+        assert_eq!(worktrees.len(), 2);
+        assert!(worktrees[0].is_bare);
+        assert!(worktrees[0].is_main);
+        assert_eq!(worktrees[0].branch, "");
+        assert!(!worktrees[1].is_bare);
+        assert_eq!(worktrees[1].branch, "main");
+    }
+
+    #[test]
+    fn test_parse_worktree_list_detached() {
+        let porcelain = "\
+worktree /home/user/repo
+HEAD abc1234567890abcdef
+branch refs/heads/main
+
+worktree /home/user/repo.worktrees/detached
+HEAD 1a2b3c4d5e6f7890abcdef
+detached
+";
+        let worktrees = parse_worktree_list(porcelain);
+        assert_eq!(worktrees.len(), 2);
+
+        let detached = &worktrees[1];
+        assert!(detached.is_detached);
+        // Branch falls back to the short (7-char) SHA so the row is not blank.
+        assert_eq!(detached.branch, "1a2b3c4");
+        assert!(!detached.prunable);
+    }
+
+    #[test]
+    fn test_parse_worktree_list_prunable() {
+        let porcelain = "\
+worktree /home/user/repo
+HEAD abc1234567890abcdef
+branch refs/heads/main
+
+worktree /home/user/repo.worktrees/gone
+HEAD 9876543210fedcba
+branch refs/heads/old-feature
+prunable gitdir file points to non-existent location
+";
+        let worktrees = parse_worktree_list(porcelain);
+        assert_eq!(worktrees.len(), 2);
+
+        let prunable = &worktrees[1];
+        assert!(prunable.prunable);
+        assert_eq!(prunable.branch, "old-feature");
+        assert!(!prunable.is_detached);
+    }
+
+    #[test]
+    fn test_parse_worktree_list_empty() {
+        assert!(parse_worktree_list("").is_empty());
     }
 
     #[test]

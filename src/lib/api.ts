@@ -7,6 +7,15 @@ export interface BackendWorktree {
   branch: string;
   is_main: boolean;
   is_bare: boolean;
+  is_detached: boolean;
+  prunable: boolean;
+}
+
+export interface RunningServer {
+  worktree_path: string;
+  port: number;
+  pid: number;
+  process_name: string;
 }
 
 export interface BackendBranch {
@@ -174,6 +183,10 @@ export async function pruneWorktrees(repoPath: string): Promise<void> {
 
 export async function getWorktreeStatus(worktreePath: string): Promise<BackendWorktreeStatus> {
   return invoke('get_worktree_status', { worktreePath });
+}
+
+export async function getRunningServers(worktreePaths: string[]): Promise<RunningServer[]> {
+  return invoke('get_running_servers', { worktreePaths });
 }
 
 // ============ Git - Branch API ============

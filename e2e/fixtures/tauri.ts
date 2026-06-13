@@ -52,14 +52,19 @@ export const mockData = {
     jira_configs: [],
   },
   worktrees: [
-    { path: '/tmp/test-project/repo', branch: 'main', is_main: true, is_bare: false },
-    { path: '/tmp/test-project/worktrees/feature-auth', branch: 'feature-auth', is_main: false, is_bare: false },
-    { path: '/tmp/test-project/worktrees/feature-ui', branch: 'feature-ui', is_main: false, is_bare: false },
+    { path: '/tmp/test-project/repo', branch: 'main', is_main: true, is_bare: false, is_detached: false, prunable: false },
+    { path: '/tmp/test-project/worktrees/feature-auth', branch: 'feature-auth', is_main: false, is_bare: false, is_detached: false, prunable: false },
+    { path: '/tmp/test-project/worktrees/feature-ui', branch: 'feature-ui', is_main: false, is_bare: false, is_detached: false, prunable: false },
+    { path: '/tmp/test-project/worktrees/detached-wt', branch: 'abc1234', is_main: false, is_bare: false, is_detached: true, prunable: false },
   ],
   branches: [
     { name: 'main', is_remote: false, is_head: true },
     { name: 'feature-auth', is_remote: false, is_head: false },
     { name: 'feature-ui', is_remote: false, is_head: false },
+  ],
+  runningServers: [
+    { worktree_path: '/tmp/test-project/worktrees/feature-auth', port: 5178, pid: 12345, process_name: 'node' },
+    { worktree_path: '/tmp/test-project/worktrees/feature-auth', port: 8004, pid: 12346, process_name: 'python3.11' },
   ],
 }
 
@@ -78,6 +83,8 @@ function getTauriMockScript(data: typeof mockData) {
             return mockData.settings.projects;
           case 'get_worktrees':
             return mockData.worktrees;
+          case 'get_running_servers':
+            return mockData.runningServers;
           case 'get_branches':
             return mockData.branches;
           case 'get_github_config':
