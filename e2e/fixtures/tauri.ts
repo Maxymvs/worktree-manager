@@ -63,8 +63,8 @@ export const mockData = {
     { name: 'feature-ui', is_remote: false, is_head: false },
   ],
   runningServers: [
-    { worktree_path: '/tmp/test-project/worktrees/feature-auth', port: 5178, pid: 12345, process_name: 'node' },
-    { worktree_path: '/tmp/test-project/worktrees/feature-auth', port: 8004, pid: 12346, process_name: 'python3.11' },
+    { worktree_path: '/tmp/test-project/worktrees/feature-auth', port: 5178, pid: 12345, process_name: 'node', address: '127.0.0.1', uptime_secs: 8130 },
+    { worktree_path: '/tmp/test-project/worktrees/feature-auth', port: 8004, pid: 12346, process_name: 'python3.11', address: '*', uptime_secs: 45 },
   ],
 }
 

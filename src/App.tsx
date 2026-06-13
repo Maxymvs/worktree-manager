@@ -6,6 +6,7 @@ import { AddProjectPage } from '@/pages/AddProjectPage';
 import { CreateWorktreePage } from '@/pages/CreateWorktreePage';
 import { EditWorktreePage } from '@/pages/EditWorktreePage';
 import { onOpenUrl, getCurrent } from '@tauri-apps/plugin-deep-link';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import * as api from '@/lib/api';
 import { parseDeepLink, findBestMatchingProject } from '@/lib/deep-link';
 import type { Project, Worktree, IDEPreset, DeepLinkParams } from '@/types';
@@ -274,8 +275,9 @@ function App() {
   const goToWorktrees = useCallback(() => setPage('worktrees'), []);
 
   return (
-    <div className="app-container">
-      {page === 'worktrees' && (
+    <TooltipProvider delayDuration={200}>
+      <div className="app-container">
+        {page === 'worktrees' && (
         <WorktreeListPage
           key={refreshKey}
           onOpenSettings={() => setPage('settings')}
@@ -320,7 +322,8 @@ function App() {
           onSaved={handleRefresh}
         />
       )}
-    </div>
+      </div>
+    </TooltipProvider>
   );
 }
 

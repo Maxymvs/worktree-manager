@@ -13,8 +13,39 @@ import {
   Trash2,
 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import type { PullRequestInfo, RunningServer } from '@/lib/api';
 import type { WorktreeWithIntegrations } from './types';
+
+/** Compact human-readable uptime, e.g. "45s", "12m", "3h 5m", "2d 4h". */
+function formatUptime(secs: number): string {
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m`;
+  if (secs < 86400) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  return h > 0 ? `${d}d ${h}h` : `${d}d`;
+}
+
+/** Human label for a listener's bind address. Returns '' when not meaningful. */
+function bindScopeLabel(address: string): string {
+  switch (address) {
+    case '*':
+    case '0.0.0.0':
+      return 'all interfaces';
+    case '127.0.0.1':
+    case '::1':
+    case '[::1]':
+    case 'localhost':
+      return 'localhost only';
+    default:
+      return address;
+  }
+}
 
 interface WorktreeRowProps {
   worktree: WorktreeWithIntegrations;
@@ -183,26 +214,58 @@ export function WorktreeRow({
           {serverPorts.length > 0 && (
             <>
               <span className="server-pulse-dot" aria-hidden="true" />
-              {visiblePorts.map((server) => (
-                <button
-                  key={server.port}
-                  className="integration-badge-link status-running"
-                  title={`${server.process_name} (pid ${server.pid}) — open http://localhost:${server.port}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openUrl(`http://localhost:${server.port}`);
-                  }}
-                >
-                  <span className="badge-text">:{server.port}</span>
-                </button>
-              ))}
+              {visiblePorts.map((server) => {
+                const scope = bindScopeLabel(server.address);
+                return (
+                  <Tooltip key={server.port}>
+                    <TooltipTrigger asChild>
+                      <button
+                        className="integration-badge-link status-running"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openUrl(`http://localhost:${server.port}`);
+                        }}
+                      >
+                        <span className="badge-text">:{server.port}</span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <div className="font-medium">
+                        {server.process_name} · pid {server.pid}
+                      </div>
+                      <div>
+                        http://localhost:{server.port}
+                        {scope && (
+                          <span className="ml-1.5 text-muted-foreground">{scope}</span>
+                        )}
+                      </div>
+                      {server.uptime_secs > 0 && (
+                        <div className="text-muted-foreground">
+                          up {formatUptime(server.uptime_secs)}
+                        </div>
+                      )}
+                      <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">
+                        Click to open in browser
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              })}
               {overflowPorts.length > 0 && (
-                <span
-                  className="integration-badge-link status-running"
-                  title={`Also: ${overflowPorts.map((s) => `:${s.port}`).join(', ')}`}
-                >
-                  <span className="badge-text">+{overflowPorts.length}</span>
-                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="integration-badge-link status-running">
+                      <span className="badge-text">+{overflowPorts.length}</span>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {overflowPorts.map((s) => (
+                      <div key={s.port}>
+                        {s.process_name} :{s.port}
+                      </div>
+                    ))}
+                  </TooltipContent>
+                </Tooltip>
               )}
             </>
           )}

@@ -22,6 +22,23 @@ test.describe('Running Servers @worktree', () => {
     await expect(featureUiRow.locator('.status-running')).toHaveCount(0)
   })
 
+  test('hovering a port badge shows the rich tooltip', async ({ mockedPage }) => {
+    await mockedPage.locator('.worktree-row').first().waitFor({ timeout: 10000 })
+
+    const featureRow = mockedPage.locator('.worktree-row:has-text("feature-auth")')
+    const portBadge = featureRow.locator('.status-running:has-text(":5178")')
+    await expect(portBadge).toBeVisible()
+
+    await portBadge.hover()
+
+    // The Radix tooltip is portaled to the body; assert its enriched content
+    // (pid + the open hint) becomes visible. Generous timeout absorbs the
+    // provider's open delay without a fixed wait.
+    const tooltip = mockedPage.getByRole('tooltip')
+    await expect(tooltip).toContainText('pid 12345', { timeout: 5000 })
+    await expect(tooltip).toContainText('Click to open in browser')
+  })
+
   test('clicking a port badge does NOT trigger the open-IDE flow', async ({ mockedPage }) => {
     await mockedPage.locator('.worktree-row').first().waitFor({ timeout: 10000 })
 

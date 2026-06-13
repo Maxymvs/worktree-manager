@@ -1029,3 +1029,35 @@ html, body, #root {
   @apply text-sm mt-1 mb-2;
   color: hsl(var(--muted-foreground));
 }
+
+/* Tooltip (Radix) entrance animation. Direction-aware fade + slight zoom,
+   only when the user hasn't asked to reduce motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .tooltip-content[data-state='delayed-open'],
+  .tooltip-content[data-state='instant-open'] {
+    animation: tooltipShow 120ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .tooltip-content[data-side='top'][data-state^='delayed'],
+  .tooltip-content[data-side='top'][data-state^='instant'] {
+    animation-name: tooltipShowTop;
+  }
+  .tooltip-content[data-side='bottom'][data-state^='delayed'],
+  .tooltip-content[data-side='bottom'][data-state^='instant'] {
+    animation-name: tooltipShowBottom;
+  }
+}
+
+@keyframes tooltipShow {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes tooltipShowTop {
+  from { opacity: 0; transform: translateY(2px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes tooltipShowBottom {
+  from { opacity: 0; transform: translateY(-2px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}

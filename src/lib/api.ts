@@ -16,6 +16,8 @@ export interface RunningServer {
   port: number;
   pid: number;
   process_name: string;
+  address: string;
+  uptime_secs: number;
 }
 
 export interface BackendBranch {
