@@ -166,14 +166,16 @@ export function WorktreeRow({
         )}
       </div>
 
-      {/* Description - only show if any worktree has description */}
-      {showDescription && (
-        <div className="worktree-col-description">
+      {/* Description column doubles as the flexible spacer that right-aligns
+          the server/GitHub/Jira/action columns, so the cell always renders;
+          the text only appears when a description exists. */}
+      <div className="worktree-col-description">
+        {showDescription && (
           <span className="worktree-description">
             {worktree.description}
           </span>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Running dev servers - port badges */}
       {showServers && (
