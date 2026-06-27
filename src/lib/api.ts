@@ -261,6 +261,7 @@ export async function copyPathsToWorktree(
 export interface WorktreeMemo {
   description?: string;
   issue_number?: string;
+  comment?: string;
 }
 
 export async function getWorktreeMemo(path: string): Promise<WorktreeMemo> {

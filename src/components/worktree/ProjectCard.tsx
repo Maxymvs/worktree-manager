@@ -24,6 +24,7 @@ interface ProjectCardProps {
   onOpenTerminal: (path: string) => void;
   onCreateWorktree: () => void;
   onEditWorktree: (worktree: Worktree, repoPath: string) => void;
+  onEditComment: (worktree: Worktree, repoPath: string) => void;
   onDeleteWorktree: (worktree: Worktree, repoPath: string) => void;
   showDescription: boolean;
   showGitHub: boolean;
@@ -71,6 +72,7 @@ export function ProjectCard({
   onOpenTerminal,
   onCreateWorktree,
   onEditWorktree,
+  onEditComment,
   onDeleteWorktree,
   showDescription,
   showGitHub,
@@ -96,7 +98,8 @@ export function ProjectCard({
     return sorted.filter((w) => {
       const branchMatch = w.branch.toLowerCase().includes(query);
       const descMatch = w.description?.toLowerCase().includes(query);
-      return branchMatch || descMatch;
+      const commentMatch = w.comment?.toLowerCase().includes(query);
+      return branchMatch || descMatch || commentMatch;
     });
   }, [project.worktrees, searchQuery]);
   return (
@@ -172,6 +175,7 @@ export function ProjectCard({
                 onOpenFinder={onOpenFinder}
                 onOpenTerminal={onOpenTerminal}
                 onEdit={() => onEditWorktree(worktree, project.repoPath)}
+                onEditComment={() => onEditComment(worktree, project.repoPath)}
                 onDelete={() => onDeleteWorktree(worktree, project.repoPath)}
                 showDescription={showDescription}
                 showGitHub={showGitHub}

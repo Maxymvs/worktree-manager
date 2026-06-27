@@ -143,6 +143,7 @@ export function useWorktreeData({
                   const memo = await api.getWorktreeMemo(w.path);
                   result.description = memo.description;
                   result.issueNumber = memo.issue_number;
+                  result.comment = memo.comment;
                 } catch {
                   // Ignore
                 }

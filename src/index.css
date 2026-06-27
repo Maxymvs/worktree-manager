@@ -246,6 +246,16 @@ html, body, #root {
 .worktree-col-jira { @apply w-[80px] flex justify-center; }
 .worktree-col-servers { @apply flex items-center gap-1 px-1; }
 
+/* User note/reminder line — spans the full row width, text left-aligned under
+   the branch name. The 20px indent matches the branch icon (14px) + the 1.5
+   gap of .worktree-col-branch, on top of the row's own px-3. */
+.worktree-comment {
+  grid-column: 1 / -1;
+  @apply mt-0.5 pl-[20px] pr-2;
+  color: hsl(var(--muted-foreground));
+}
+.worktree-comment-text { @apply text-[11px] leading-snug whitespace-pre-wrap break-words; }
+
 /* Integration badges (GitHub PR, Jira Issue) */
 .integration-badge-link {
   @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium transition-all cursor-pointer;
@@ -994,6 +1004,21 @@ html, body, #root {
 
 .modal-icon img {
   @apply w-full h-full object-contain;
+}
+
+/* Modal Textarea */
+.modal-textarea {
+  @apply w-full mt-3 px-2.5 py-2 rounded-md text-xs resize-none;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  color: hsl(var(--foreground));
+}
+.dark .modal-textarea {
+  background: hsl(240 6% 10%);
+}
+.modal-textarea:focus {
+  @apply outline-none ring-1;
+  ring-color: hsl(var(--ring));
 }
 
 /* Modal Checkbox */

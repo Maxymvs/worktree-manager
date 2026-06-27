@@ -82,6 +82,8 @@ impl From<&JiraConfig> for JiraConfigMeta {
 pub struct WorktreeMemo {
     pub description: Option<String>,
     pub issue_number: Option<String>,
+    #[serde(default)]
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

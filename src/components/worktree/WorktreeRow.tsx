@@ -12,6 +12,8 @@ import {
   GitMerge,
   Trash2,
   ChevronDown,
+  MessageSquare,
+  MessageSquarePlus,
 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
@@ -71,6 +73,7 @@ interface WorktreeRowProps {
   onOpenFinder: (path: string) => void;
   onOpenTerminal: (path: string) => void;
   onEdit: () => void;
+  onEditComment: () => void;
   onDelete: () => void;
   showDescription: boolean;
   showGitHub: boolean;
@@ -87,6 +90,7 @@ export function WorktreeRow({
   onOpenFinder,
   onOpenTerminal,
   onEdit,
+  onEditComment,
   onDelete,
   showDescription,
   showGitHub,
@@ -272,6 +276,17 @@ export function WorktreeRow({
               <Terminal size={14} />
               <span>Open Terminal</span>
             </button>
+            <button
+              className="worktree-dropdown-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                onEditComment();
+                setShowActions(false);
+              }}
+            >
+              {worktree.comment ? <MessageSquare size={14} /> : <MessageSquarePlus size={14} />}
+              <span>{worktree.comment ? 'Edit comment' : 'Add comment'}</span>
+            </button>
             {!worktree.isMain && (
               <>
                 <div className="worktree-dropdown-divider" />
@@ -397,6 +412,13 @@ export function WorktreeRow({
               <ExternalLink size={8} className="badge-external" />
             </button>
           ) : null}
+        </div>
+      )}
+
+      {/* User note/reminder — full-width line under the row content */}
+      {worktree.comment && (
+        <div className="worktree-comment">
+          <span className="worktree-comment-text">{worktree.comment}</span>
         </div>
       )}
     </div>

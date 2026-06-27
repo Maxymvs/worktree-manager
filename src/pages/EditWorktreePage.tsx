@@ -18,6 +18,8 @@ export function EditWorktreePage({ worktree, onBack, onSaved }: EditWorktreePage
   const [branchName, setBranchName] = useState(worktree.branch);
   const [issueNumber, setIssueNumber] = useState('');
   const [description, setDescription] = useState('');
+  // Preserved as-is (edited via the row's comment modal, not this page).
+  const [comment, setComment] = useState<string | undefined>(undefined);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -43,6 +45,7 @@ export function EditWorktreePage({ worktree, onBack, onSaved }: EditWorktreePage
       const memo = await api.getWorktreeMemo(worktree.path);
       setIssueNumber(memo.issue_number || '');
       setDescription(memo.description || '');
+      setComment(memo.comment);
     } catch {
       // Ignore - use defaults
     }
@@ -65,6 +68,7 @@ export function EditWorktreePage({ worktree, onBack, onSaved }: EditWorktreePage
       await api.setWorktreeMemo(worktree.path, {
         description: description.trim() || undefined,
         issue_number: issueNumber.trim() || undefined,
+        comment,
       });
 
       onSaved();
