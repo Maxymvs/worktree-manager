@@ -11,9 +11,10 @@ import {
   CircleDot,
   GitMerge,
   Trash2,
+  ChevronDown,
 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
 import type { PullRequestInfo, RunningServer } from '@/lib/api';
 import type { WorktreeWithIntegrations } from './types';
 
@@ -168,9 +169,8 @@ export function WorktreeRow({
     return [...byPort.values()].sort((a, b) => a.port - b.port);
   }, [servers]);
 
-  const MAX_VISIBLE_PORTS = 3;
-  const visiblePorts = serverPorts.slice(0, MAX_VISIBLE_PORTS);
-  const overflowPorts = serverPorts.slice(MAX_VISIBLE_PORTS);
+  const primary = serverPorts[0];
+  const hasMultiple = serverPorts.length > 1;
 
   return (
     <div
@@ -208,66 +208,57 @@ export function WorktreeRow({
         )}
       </div>
 
-      {/* Running dev servers - port badges */}
+      {/* Running dev servers - single primary pill + hover dropdown */}
       {showServers && (
         <div className="worktree-col-servers">
-          {serverPorts.length > 0 && (
-            <>
-              <span className="server-pulse-dot" aria-hidden="true" />
-              {visiblePorts.map((server) => {
-                const scope = bindScopeLabel(server.address);
-                return (
-                  <Tooltip key={server.port}>
-                    <TooltipTrigger asChild>
+          {primary && (
+            <HoverCard openDelay={150} closeDelay={100}>
+              <HoverCardTrigger asChild>
+                <button
+                  className="integration-badge-link status-running server-pill"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openUrl(`http://localhost:${primary.port}`);
+                  }}
+                >
+                  <span className="server-pulse-dot" aria-hidden="true" />
+                  <span className="badge-text">:{primary.port}</span>
+                  {hasMultiple && (
+                    <ChevronDown size={10} className="server-pill-chevron" aria-hidden="true" />
+                  )}
+                </button>
+              </HoverCardTrigger>
+              <HoverCardContent className="server-hover-card">
+                <div className="server-hover-list">
+                  {serverPorts.map((server) => {
+                    const scope = bindScopeLabel(server.address);
+                    return (
                       <button
-                        className="integration-badge-link status-running"
+                        key={server.port}
+                        className="server-hover-item"
                         onClick={(e) => {
                           e.stopPropagation();
                           openUrl(`http://localhost:${server.port}`);
                         }}
                       >
-                        <span className="badge-text">:{server.port}</span>
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <div className="font-medium">
-                        {server.process_name} · pid {server.pid}
-                      </div>
-                      <div>
-                        http://localhost:{server.port}
-                        {scope && (
-                          <span className="ml-1.5 text-muted-foreground">{scope}</span>
+                        <span className="server-hover-item-head">
+                          <span className="server-hover-name">{server.process_name}</span>
+                          <span className="server-hover-port">:{server.port}</span>
+                        </span>
+                        {(server.uptime_secs > 0 || scope) && (
+                          <span className="server-hover-meta">
+                            {server.uptime_secs > 0 && <span>up {formatUptime(server.uptime_secs)}</span>}
+                            {server.uptime_secs > 0 && scope && <span className="server-hover-sep">·</span>}
+                            {scope && <span>{scope}</span>}
+                          </span>
                         )}
-                      </div>
-                      {server.uptime_secs > 0 && (
-                        <div className="text-muted-foreground">
-                          up {formatUptime(server.uptime_secs)}
-                        </div>
-                      )}
-                      <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">
-                        Click to open in browser
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
-                );
-              })}
-              {overflowPorts.length > 0 && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="integration-badge-link status-running">
-                      <span className="badge-text">+{overflowPorts.length}</span>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {overflowPorts.map((s) => (
-                      <div key={s.port}>
-                        {s.process_name} :{s.port}
-                      </div>
-                    ))}
-                  </TooltipContent>
-                </Tooltip>
-              )}
-            </>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="server-hover-footer">Click to open in browser</div>
+              </HoverCardContent>
+            </HoverCard>
           )}
         </div>
       )}

@@ -299,6 +299,35 @@ html, body, #root {
   50% { opacity: 0.4; transform: scale(0.7); }
 }
 
+/* Single primary server pill + hover dropdown */
+.server-pill { gap: 4px; }
+.server-pill-chevron {
+  @apply flex-shrink-0;
+  opacity: 0.6;
+  margin-left: 1px;
+}
+.server-hover-card { @apply min-w-[10rem]; }
+.server-hover-list { @apply flex flex-col gap-0.5; }
+.server-hover-item {
+  @apply flex flex-col items-start gap-0.5 w-full rounded px-2 py-1 text-left transition-colors cursor-pointer;
+  background: transparent;
+  border: none;
+}
+.server-hover-item:hover { background: hsl(var(--accent)); }
+.server-hover-item-head { @apply flex items-baseline gap-1.5; }
+.server-hover-name { @apply font-medium; color: hsl(var(--foreground)); }
+.server-hover-port { color: hsl(142 70% 45%); }
+.server-hover-meta {
+  @apply flex items-center gap-1.5 text-[0.6875rem];
+  color: hsl(var(--muted-foreground));
+}
+.server-hover-sep { opacity: 0.6; }
+.server-hover-footer {
+  @apply mt-1 px-2 pt-1 text-[0.6875rem];
+  color: hsl(var(--muted-foreground));
+  border-top: 1px solid hsl(var(--border));
+}
+
 /* Legacy integration-link (for backwards compat) */
 .integration-link {
   @apply flex items-center gap-1 text-xs transition-colors cursor-pointer;
@@ -1064,4 +1093,17 @@ html, body, #root {
 @keyframes tooltipShowBottom {
   from { opacity: 0; transform: translateY(-2px) scale(0.96); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Hover card (Radix) entrance animation, mirroring the tooltip's. */
+@media (prefers-reduced-motion: no-preference) {
+  .hover-card-content[data-state='open'] {
+    animation: tooltipShow 120ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .hover-card-content[data-side='top'][data-state='open'] {
+    animation-name: tooltipShowTop;
+  }
+  .hover-card-content[data-side='bottom'][data-state='open'] {
+    animation-name: tooltipShowBottom;
+  }
 }
