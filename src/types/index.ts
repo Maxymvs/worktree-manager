@@ -7,6 +7,7 @@ export interface Worktree {
   prunable?: boolean;
   description?: string;
   issueNumber?: string;
+  comment?: string;
   repoPath?: string; // Added for edit context
 }
 

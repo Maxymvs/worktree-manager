@@ -30,6 +30,7 @@ import type { Project, Worktree, IDEPreset } from '@/types';
 import { SortableProjectCard } from '@/components/worktree/ProjectCard';
 import { IdeConfirmModal } from '@/components/worktree/modals/IdeConfirmModal';
 import { DeleteWorktreeModals } from '@/components/worktree/modals/DeleteWorktreeModals';
+import { CommentModal } from '@/components/worktree/modals/CommentModal';
 import { useServerPolling } from '@/hooks/useServerPolling';
 import { useWorktreeData } from '@/hooks/useWorktreeData';
 import { useWorktreeKeyboardNav } from '@/hooks/useWorktreeKeyboardNav';
@@ -89,6 +90,14 @@ export function WorktreeListPage({
   const [forceDeleteError, setForceDeleteError] = useState('');
   const [errorModalOpen, setErrorModalOpen] = useState(false);
   const [errorModalMessage, setErrorModalMessage] = useState('');
+
+  // Comment/note modal state
+  const [commentModalOpen, setCommentModalOpen] = useState(false);
+  const [savingComment, setSavingComment] = useState(false);
+  const [commentTarget, setCommentTarget] = useState<{
+    worktree: Worktree;
+    repoPath: string;
+  } | null>(null);
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
@@ -188,7 +197,7 @@ export function WorktreeListPage({
   } = useWorktreeKeyboardNav({
     projects,
     expandedProjects,
-    modalOpen: ideModalOpen || deleteModalOpen || forceDeleteModalOpen || errorModalOpen,
+    modalOpen: ideModalOpen || deleteModalOpen || forceDeleteModalOpen || errorModalOpen || commentModalOpen,
     onOpenIde: handleOpenIde,
   });
 
@@ -244,6 +253,56 @@ export function WorktreeListPage({
     // offer to delete it.
     setDeleteBranchToo(!worktree.isDetached);
     setDeleteModalOpen(true);
+  };
+
+  const handleEditComment = (worktree: Worktree, repoPath: string) => {
+    setCommentTarget({ worktree, repoPath });
+    setCommentModalOpen(true);
+  };
+
+  const handleSaveComment = async (comment: string) => {
+    if (!commentTarget) return;
+    const { worktree, repoPath } = commentTarget;
+    const next = comment || undefined;
+
+    flushSync(() => setSavingComment(true));
+    try {
+      // setWorktreeMemo replaces the whole memo, so preserve the other fields.
+      await api.setWorktreeMemo(worktree.path, {
+        description: worktree.description,
+        issue_number: worktree.issueNumber,
+        comment: next,
+      });
+      // Update local state so the note appears without a full reload.
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.repoPath === repoPath
+            ? {
+                ...p,
+                worktrees: p.worktrees.map((w) =>
+                  w.path === worktree.path ? { ...w, comment: next } : w
+                ),
+              }
+            : p
+        )
+      );
+      setCommentModalOpen(false);
+      setCommentTarget(null);
+    } catch (err) {
+      console.error('Failed to save comment:', err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setCommentModalOpen(false);
+      setCommentTarget(null);
+      setErrorModalMessage(`Failed to save comment: ${errorMessage}`);
+      setErrorModalOpen(true);
+    } finally {
+      setSavingComment(false);
+    }
+  };
+
+  const handleCancelComment = () => {
+    setCommentModalOpen(false);
+    setCommentTarget(null);
   };
 
   const executeDeleteWorktree = async (force: boolean = false) => {
@@ -380,6 +439,7 @@ export function WorktreeListPage({
                   onOpenTerminal={handleOpenTerminal}
                   onCreateWorktree={() => onCreateWorktree(project)}
                   onEditWorktree={onEditWorktree}
+                  onEditComment={handleEditComment}
                   onDeleteWorktree={handleDeleteWorktree}
                   showDescription={hasAnyDescription}
                   showGitHub={hasAnyGitHub}
@@ -430,6 +490,24 @@ export function WorktreeListPage({
         errorModalOpen={errorModalOpen}
         onErrorModalOpenChange={setErrorModalOpen}
         errorModalMessage={errorModalMessage}
+      />
+
+      {/* Worktree comment/note modal */}
+      <CommentModal
+        open={commentModalOpen}
+        onOpenChange={setCommentModalOpen}
+        data={
+          commentTarget
+            ? {
+                path: commentTarget.worktree.path,
+                branch: commentTarget.worktree.branch,
+                initialComment: commentTarget.worktree.comment ?? '',
+              }
+            : null
+        }
+        saving={savingComment}
+        onSave={handleSaveComment}
+        onCancel={handleCancelComment}
       />
     </div>
   );

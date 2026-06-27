@@ -66,11 +66,16 @@ export const mockData = {
     { worktree_path: '/tmp/test-project/worktrees/feature-auth', port: 5178, pid: 12345, process_name: 'node', address: '127.0.0.1', uptime_secs: 8130 },
     { worktree_path: '/tmp/test-project/worktrees/feature-auth', port: 8004, pid: 12346, process_name: 'python3.11', address: '*', uptime_secs: 45 },
   ],
+  // Per-worktree memos (description/issue_number/comment), keyed by worktree path.
+  worktreeMemos: {} as Record<string, { description?: string | null; issue_number?: string | null; comment?: string | null }>,
 }
 
 // Script to inject Tauri mock into the page
 function getTauriMockScript(data: typeof mockData) {
   return `
+    // Stateful per-page-session memo store so set_worktree_memo writes are
+    // reflected by get_worktree_memo within a test.
+    const worktreeMemos = ${JSON.stringify(data.worktreeMemos ?? {})};
     window.__TAURI_INTERNALS__ = {
       invoke: async (cmd, args) => {
         console.log('[Tauri Mock] invoke:', cmd, args);
@@ -92,7 +97,10 @@ function getTauriMockScript(data: typeof mockData) {
           case 'get_jira_config':
             return null;
           case 'get_worktree_memo':
-            return { description: null, issue_number: null };
+            return worktreeMemos[args.path] ?? { description: null, issue_number: null, comment: null };
+          case 'set_worktree_memo':
+            worktreeMemos[args.path] = args.memo;
+            return null;
           case 'set_theme':
           case 'set_ide':
           case 'set_skip_open_ide_confirm':
