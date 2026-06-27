@@ -121,15 +121,16 @@ export function WorktreeRow({
       const openUpward = spaceBelow < dropdownHeight + 10;
 
       if (openUpward) {
-        // Use bottom positioning for upward opening
+        // Use bottom positioning for upward opening. Button is now on the
+        // left side of the row, so left-align the menu to the button.
         setDropdownPos({
           bottom: window.innerHeight - rect.top + 2,
-          left: rect.right - 160,
+          left: Math.max(8, rect.left),
         });
       } else {
         setDropdownPos({
           top: rect.bottom + 2,
-          left: rect.right - 160,
+          left: Math.max(8, rect.left),
         });
       }
     }
@@ -194,6 +195,76 @@ export function WorktreeRow({
           <span className="worktree-prunable-badge" title="This worktree can be pruned">
             prunable
           </span>
+        )}
+        <button
+          ref={buttonRef}
+          className="worktree-more"
+          title="More actions"
+          onClick={handleMoreClick}
+        >
+          <MoreHorizontal size={14} />
+        </button>
+        {showActions && createPortal(
+          <div
+            ref={dropdownRef}
+            className="worktree-actions-dropdown-portal"
+            style={{
+              top: dropdownPos.top,
+              bottom: dropdownPos.bottom,
+              left: dropdownPos.left,
+            }}
+          >
+            <button
+              className="worktree-dropdown-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdit();
+                setShowActions(false);
+              }}
+            >
+              <Pencil size={14} />
+              <span>Edit</span>
+            </button>
+            <button
+              className="worktree-dropdown-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenFinder(worktree.path);
+                setShowActions(false);
+              }}
+            >
+              <Folder size={14} />
+              <span>Open in Finder</span>
+            </button>
+            <button
+              className="worktree-dropdown-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenTerminal(worktree.path);
+                setShowActions(false);
+              }}
+            >
+              <Terminal size={14} />
+              <span>Open Terminal</span>
+            </button>
+            {!worktree.isMain && (
+              <>
+                <div className="worktree-dropdown-divider" />
+                <button
+                  className="worktree-dropdown-item worktree-dropdown-item-danger"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowActions(false);
+                    onDelete();
+                  }}
+                >
+                  <Trash2 size={14} />
+                  <span>Delete</span>
+                </button>
+              </>
+            )}
+          </div>,
+          document.body
         )}
       </div>
 
@@ -303,80 +374,6 @@ export function WorktreeRow({
           ) : null}
         </div>
       )}
-
-      {/* Actions */}
-      <div className="worktree-col-actions">
-        <button
-          ref={buttonRef}
-          className="worktree-more"
-          title="More actions"
-          onClick={handleMoreClick}
-        >
-          <MoreHorizontal size={14} />
-        </button>
-        {showActions && createPortal(
-          <div
-            ref={dropdownRef}
-            className="worktree-actions-dropdown-portal"
-            style={{
-              top: dropdownPos.top,
-              bottom: dropdownPos.bottom,
-              left: dropdownPos.left,
-            }}
-          >
-            <button
-              className="worktree-dropdown-item"
-              onClick={(e) => {
-                e.stopPropagation();
-                onEdit();
-                setShowActions(false);
-              }}
-            >
-              <Pencil size={14} />
-              <span>Edit</span>
-            </button>
-            <button
-              className="worktree-dropdown-item"
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenFinder(worktree.path);
-                setShowActions(false);
-              }}
-            >
-              <Folder size={14} />
-              <span>Open in Finder</span>
-            </button>
-            <button
-              className="worktree-dropdown-item"
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenTerminal(worktree.path);
-                setShowActions(false);
-              }}
-            >
-              <Terminal size={14} />
-              <span>Open Terminal</span>
-            </button>
-            {!worktree.isMain && (
-              <>
-                <div className="worktree-dropdown-divider" />
-                <button
-                  className="worktree-dropdown-item worktree-dropdown-item-danger"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowActions(false);
-                    onDelete();
-                  }}
-                >
-                  <Trash2 size={14} />
-                  <span>Delete</span>
-                </button>
-              </>
-            )}
-          </div>,
-          document.body
-        )}
-      </div>
     </div>
   );
 }

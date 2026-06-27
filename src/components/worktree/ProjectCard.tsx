@@ -150,13 +150,12 @@ export function ProjectCard({
             gridTemplateColumns: [
               'auto',
               // Always-present flexible spacer: holds the description when one
-              // exists, and otherwise right-aligns the status/server/action
-              // columns against the panel edge regardless of branch length.
+              // exists, and otherwise right-aligns the status/server columns
+              // flush against the panel edge regardless of branch length.
               'minmax(0, 1fr)',
               showServers ? 'auto' : null,
               showGitHub ? '80px' : null,
               showJira ? '80px' : null,
-              '44px',
             ].filter(Boolean).join(' '),
           }}
         >
