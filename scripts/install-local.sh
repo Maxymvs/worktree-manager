@@ -20,7 +20,9 @@ APP_BUNDLE="src-tauri/target/release/bundle/macos/${APP_NAME}.app"
 DEST="/Applications/${APP_NAME}.app"
 
 echo "==> Building ${APP_NAME} (release). First build takes a few minutes..."
-pnpm tauri build
+# --bundles app builds only the .app (no .dmg), so no "drag to Applications"
+# Finder window pops up — we install by copying the bundle directly below.
+pnpm tauri build --bundles app
 
 if [ ! -d "$APP_BUNDLE" ]; then
   echo "ERROR: build did not produce \"$APP_BUNDLE\"" >&2
