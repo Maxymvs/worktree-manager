@@ -18,8 +18,8 @@ test.describe('Worktree Actions @worktree @critical', () => {
     const worktreeRows = mockedPage.locator('.worktree-row')
     await expect(worktreeRows.first()).toBeVisible({ timeout: 10000 })
 
-    // Should have 3 worktrees (main + 2 feature branches)
-    await expect(worktreeRows).toHaveCount(3)
+    // Should have 4 worktrees (main + 2 feature branches + 1 detached)
+    await expect(worktreeRows).toHaveCount(4)
   })
 
   test('main branch has main badge', async ({ mockedPage }) => {

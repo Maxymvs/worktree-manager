@@ -174,7 +174,7 @@ export function ProjectSettingsPage({ project, onBack, onDeleted, onSaved }: Pro
                 <div>
                   <div className="danger-zone-item-title">Delete Project</div>
                   <div className="danger-zone-item-desc">
-                    Remove this project from Grovr. This will not delete the actual repository.
+                    Remove this project from Worktree Manager. This will not delete the actual repository.
                   </div>
                 </div>
                 <button className="btn-danger" onClick={handleDelete} disabled={deleting}>
@@ -193,7 +193,7 @@ export function ProjectSettingsPage({ project, onBack, onDeleted, onSaved }: Pro
         open={deleteModalOpen}
         onOpenChange={setDeleteModalOpen}
         title="Delete Project"
-        description={`Are you sure you want to remove "${project.name}" from Grovr?\n\nThis will not delete the actual repository.`}
+        description={`Are you sure you want to remove "${project.name}" from Worktree Manager?\n\nThis will not delete the actual repository.`}
         confirmLabel="Delete"
         variant="destructive"
         onConfirm={executeDelete}

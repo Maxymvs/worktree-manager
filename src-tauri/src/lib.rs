@@ -24,6 +24,7 @@ use commands::git::{
     delete_branch, rename_branch, git_fetch, git_pull, get_github_remote_info, open_ide,
     open_in_finder, open_terminal, copy_paths_to_worktree,
 };
+use commands::servers::get_running_servers;
 use commands::clipboard::read_clipboard_text;
 use commands::integrations::{
     get_github_config, set_github_config, remove_github_config, validate_github_token,
@@ -36,7 +37,7 @@ fn setup_window_effects(app: &tauri::App) -> Result<(), Box<dyn std::error::Erro
 
     // Set dynamic window title for preview mode (worktree isolation)
     if let Ok(worktree) = std::env::var("GROVR_PREVIEW_WORKTREE") {
-        window.set_title(&format!("Grovr ({})", worktree))?;
+        window.set_title(&format!("Worktree Manager ({})", worktree))?;
     }
 
     #[cfg(target_os = "macos")]
@@ -67,7 +68,6 @@ pub fn run() {
         .plugin(tauri_plugin_liquid_glass::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
     // Only use autostart plugin on non-macOS (Windows/Linux)
@@ -130,6 +130,8 @@ pub fn run() {
             remove_worktree,
             prune_worktrees,
             get_worktree_status,
+            // Servers
+            get_running_servers,
             // Git - Branches
             get_branches,
             get_current_branch,

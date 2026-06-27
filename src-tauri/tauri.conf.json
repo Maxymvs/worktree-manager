@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Grovr",
+  "productName": "Worktree Manager",
   "version": "0.7.3",
   "identifier": "com.grovr.desktop",
   "build": {
@@ -14,7 +14,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Grovr",
+        "title": "Worktree Manager",
         "label": "main",
         "width": 720,
         "height": 520,
@@ -34,7 +34,6 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg"],
-    "createUpdaterArtifacts": true,
     "category": "DeveloperTool",
     "icon": [
       "icons/32x32.png",
@@ -57,12 +56,6 @@
       "desktop": {
         "schemes": ["grovr"]
       }
-    },
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERFMDdCMjdFRTlBQUY4NTYKUldSVytLcnBmcklIM3BmZFpIWlBrZU1tVVJ3ak1kalM1NytONnM4NHF0bEF2Ry8zRUwxTlo3aGUK",
-      "endpoints": [
-        "https://github.com/j1king/grovr/releases/latest/download/latest.json"
-      ]
     }
   }
 }

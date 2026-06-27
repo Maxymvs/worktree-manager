@@ -139,7 +139,7 @@ export function GeneralSettings() {
         <div className="settings-item">
           <div className="settings-item-info">
             <label className="settings-label">Launch at startup</label>
-            <p className="settings-hint">Automatically open Grovr when you log in</p>
+            <p className="settings-hint">Automatically open Worktree Manager when you log in</p>
           </div>
           <label className="toggle">
             <input

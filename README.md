@@ -9,9 +9,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/j1king/grovr/releases"><img src="https://img.shields.io/github/v/release/j1king/grovr" alt="Release"></a>
-  <a href="https://github.com/j1king/grovr/releases"><img src="https://img.shields.io/github/downloads/j1king/grovr/total" alt="Downloads"></a>
+  <a href="https://github.com/Maxymvs/worktree-manager/releases"><img src="https://img.shields.io/github/v/release/Maxymvs/worktree-manager" alt="Release"></a>
+  <a href="https://github.com/Maxymvs/worktree-manager/releases"><img src="https://img.shields.io/github/downloads/Maxymvs/worktree-manager/total" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri&logoColor=white" alt="Tauri v2">
+</p>
+
+<p align="center">
+  Forked from <a href="https://github.com/j1king/grovr">j1king/grovr</a>.
 </p>
 
 ---
@@ -62,15 +66,9 @@ Delete worktrees with one click. Optionally delete the local branch too—no mor
 
 ## Installation
 
-**Homebrew (Recommended)**
-
-```bash
-brew install --cask j1king/tap/grovr
-```
-
 **Manual Download**
 
-Download the latest `.dmg` from [Releases](https://github.com/j1king/grovr/releases).
+Download the latest `.dmg` from [Releases](https://github.com/Maxymvs/worktree-manager/releases).
 
 **Requirements:** macOS 10.15+ and Git installed.
 
@@ -80,8 +78,8 @@ Download the latest `.dmg` from [Releases](https://github.com/j1king/grovr/relea
 
 ```bash
 # Clone and install
-git clone https://github.com/j1king/grovr.git
-cd grovr
+git clone https://github.com/Maxymvs/worktree-manager.git
+cd worktree-manager
 pnpm install
 
 # Run dev server

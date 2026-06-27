@@ -8,6 +8,8 @@
     --foreground: 240 10% 3.9%;
     --card: 0 0% 100%;
     --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
     --primary: 240 5.9% 10%;
     --primary-foreground: 0 0% 98%;
     --secondary: 240 4.8% 95.9%;
@@ -29,6 +31,8 @@
     --foreground: 0 0% 98%;
     --card: 240 6% 13%;
     --card-foreground: 0 0% 98%;
+    --popover: 240 6% 16%;
+    --popover-foreground: 0 0% 98%;
     --primary: 0 0% 98%;
     --primary-foreground: 240 5.9% 10%;
     --secondary: 240 4% 18%;
@@ -240,7 +244,7 @@ html, body, #root {
 .worktree-col-description { @apply min-w-0 px-2 truncate text-muted-foreground text-xs; }
 .worktree-col-github { @apply w-[80px] flex justify-center; }
 .worktree-col-jira { @apply w-[80px] flex justify-center; }
-.worktree-col-actions { @apply relative w-[44px] flex justify-end pr-2; }
+.worktree-col-servers { @apply flex items-center gap-1 px-1; }
 
 /* Integration badges (GitHub PR, Jira Issue) */
 .integration-badge-link {
@@ -275,6 +279,53 @@ html, body, #root {
 .integration-badge-link.status-in-progress { background: hsl(210 90% 55% / 0.15); color: hsl(210 90% 55%); }
 .integration-badge-link.status-todo { background: hsl(var(--accent)); color: hsl(var(--muted-foreground)); }
 .integration-badge-link.status-link-only { background: hsl(var(--secondary)); color: hsl(var(--muted-foreground)); }
+.integration-badge-link.status-running { background: hsl(142 70% 45% / 0.15); color: hsl(142 70% 45%); }
+
+/* Running dev server indicators */
+.server-pulse-dot {
+  @apply inline-block rounded-full flex-shrink-0;
+  width: 6px;
+  height: 6px;
+  background: hsl(142 70% 45%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .server-pulse-dot {
+    animation: server-pulse 1.8s ease-in-out infinite;
+  }
+}
+@keyframes server-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
+/* Single primary server pill + hover dropdown */
+.server-pill { gap: 4px; }
+.server-pill-chevron {
+  @apply flex-shrink-0;
+  opacity: 0.6;
+  margin-left: 1px;
+}
+.server-hover-card { @apply min-w-[10rem]; }
+.server-hover-list { @apply flex flex-col gap-0.5; }
+.server-hover-item {
+  @apply flex flex-col items-start gap-0.5 w-full rounded px-2 py-1 text-left transition-colors cursor-pointer;
+  background: transparent;
+  border: none;
+}
+.server-hover-item:hover { background: hsl(var(--accent)); }
+.server-hover-item-head { @apply flex items-baseline gap-1.5; }
+.server-hover-name { @apply font-medium; color: hsl(var(--foreground)); }
+.server-hover-port { color: hsl(142 70% 45%); }
+.server-hover-meta {
+  @apply flex items-center gap-1.5 text-[0.6875rem];
+  color: hsl(var(--muted-foreground));
+}
+.server-hover-sep { opacity: 0.6; }
+.server-hover-footer {
+  @apply mt-1 px-2 pt-1 text-[0.6875rem];
+  color: hsl(var(--muted-foreground));
+  border-top: 1px solid hsl(var(--border));
+}
 
 /* Legacy integration-link (for backwards compat) */
 .integration-link {
@@ -324,6 +375,16 @@ html, body, #root {
 
 .worktree-branch-icon { @apply text-muted-foreground flex-shrink-0; }
 .worktree-branch-name { @apply font-mono text-xs truncate; }
+.worktree-branch-detached { @apply font-mono text-xs italic truncate text-muted-foreground; }
+.worktree-prunable-badge {
+  @apply px-1 py-0.5 text-[9px] font-medium rounded flex-shrink-0;
+  background: hsl(38 92% 50% / 0.15);
+  color: hsl(38 92% 45%);
+}
+.dark .worktree-prunable-badge {
+  background: hsl(38 92% 50% / 0.2);
+  color: hsl(38 95% 60%);
+}
 .worktree-main-badge {
   @apply px-1 py-0.5 text-[9px] font-medium rounded flex-shrink-0;
   background: hsl(142 76% 36% / 0.15);
@@ -337,7 +398,7 @@ html, body, #root {
 .worktree-description { @apply text-xs truncate text-muted-foreground; }
 
 .worktree-more {
-  @apply w-6 h-6 rounded flex items-center justify-center transition-all opacity-0;
+  @apply w-6 h-6 ml-1 flex-shrink-0 rounded flex items-center justify-center transition-opacity opacity-0;
   color: hsl(var(--muted-foreground));
 }
 .worktree-row:hover .worktree-more { @apply opacity-100; }
@@ -999,4 +1060,49 @@ html, body, #root {
 .page-subtitle {
   @apply text-sm mt-1 mb-2;
   color: hsl(var(--muted-foreground));
+}
+
+/* Tooltip (Radix) entrance animation. Direction-aware fade + slight zoom,
+   only when the user hasn't asked to reduce motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .tooltip-content[data-state='delayed-open'],
+  .tooltip-content[data-state='instant-open'] {
+    animation: tooltipShow 120ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .tooltip-content[data-side='top'][data-state^='delayed'],
+  .tooltip-content[data-side='top'][data-state^='instant'] {
+    animation-name: tooltipShowTop;
+  }
+  .tooltip-content[data-side='bottom'][data-state^='delayed'],
+  .tooltip-content[data-side='bottom'][data-state^='instant'] {
+    animation-name: tooltipShowBottom;
+  }
+}
+
+@keyframes tooltipShow {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes tooltipShowTop {
+  from { opacity: 0; transform: translateY(2px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes tooltipShowBottom {
+  from { opacity: 0; transform: translateY(-2px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Hover card (Radix) entrance animation, mirroring the tooltip's. */
+@media (prefers-reduced-motion: no-preference) {
+  .hover-card-content[data-state='open'] {
+    animation: tooltipShow 120ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .hover-card-content[data-side='top'][data-state='open'] {
+    animation-name: tooltipShowTop;
+  }
+  .hover-card-content[data-side='bottom'][data-state='open'] {
+    animation-name: tooltipShowBottom;
+  }
 }

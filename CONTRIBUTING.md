@@ -82,4 +82,4 @@ export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="password"
 
 ## Reporting Issues
 
-Found a bug or have a feature request? Please [open an issue](https://github.com/j1king/grovr/issues/new).
+Found a bug or have a feature request? Please [open an issue](https://github.com/Maxymvs/worktree-manager/issues/new).

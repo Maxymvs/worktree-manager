@@ -34,7 +34,7 @@ export function GitHubSettings() {
     const baseHost = configType === 'enterprise' && host.trim()
       ? host.trim()
       : 'github.com';
-    return `https://${baseHost}/settings/tokens/new?scopes=repo&description=Grovr`;
+    return `https://${baseHost}/settings/tokens/new?scopes=repo&description=Worktree%20Manager`;
   };
 
   useEffect(() => {

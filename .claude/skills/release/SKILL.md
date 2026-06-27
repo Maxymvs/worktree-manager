@@ -36,7 +36,7 @@ Publishes a release to GitHub with tag and artifacts.
 
 ---
 
-**Full Changelog**: https://github.com/j1king/grovr/compare/v{PREV}...v{VERSION}
+**Full Changelog**: https://github.com/Maxymvs/worktree-manager/compare/v{PREV}...v{VERSION}
 ```
 
 Notes:
