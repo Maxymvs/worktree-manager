@@ -32,6 +32,23 @@ function formatUptime(secs: number): string {
   return h > 0 ? `${d}d ${h}h` : `${d}d`;
 }
 
+/**
+ * Heuristic score for how likely a server is the web frontend you'd open in a
+ * browser. The pill opens the highest-scoring server (ties → lowest port), so a
+ * stray low-numbered API (e.g. :4747) doesn't get picked over the real Vite
+ * dev server. The hover dropdown still lists every server regardless.
+ */
+function primaryServerScore(s: RunningServer): number {
+  let score = 0;
+  const p = s.port;
+  if (p >= 5173 && p <= 5199) score += 100;                       // Vite default range
+  else if (p >= 3000 && p <= 3010) score += 80;                   // Next/CRA/Remix/Nuxt
+  else if (p === 4321 || p === 4200 || p === 5500 || p === 8080) score += 60; // Astro/Angular/Live Server
+  const name = s.process_name.toLowerCase();
+  if (name.includes('node') || name.includes('bun') || name.includes('deno')) score += 40; // JS runtime
+  return score;
+}
+
 /** Human label for a listener's bind address. Returns '' when not meaningful. */
 function bindScopeLabel(address: string): string {
   switch (address) {
@@ -170,7 +187,15 @@ export function WorktreeRow({
     return [...byPort.values()].sort((a, b) => a.port - b.port);
   }, [servers]);
 
-  const primary = serverPorts[0];
+  // The pill opens the most likely web frontend (see primaryServerScore);
+  // the dropdown still lists every server in ascending-port order.
+  const primary = useMemo(
+    () =>
+      [...serverPorts].sort(
+        (a, b) => primaryServerScore(b) - primaryServerScore(a) || a.port - b.port
+      )[0],
+    [serverPorts]
+  );
   const hasMultiple = serverPorts.length > 1;
 
   return (
