@@ -82,22 +82,42 @@ VERSION=$(echo "$LAST_COMMIT" | sed 's/chore: bump version to //')
 echo -e "${GREEN}✓${NC} Version bump found: $VERSION"
 
 # Check 2: Build artifacts should exist
-# Prefer the universal build (scripts/release-build.sh), fall back to the
-# plain host-target build (pnpm tauri build).
+# ONLY the signed+notarized universal dmg produced by scripts/release-build.sh is
+# publishable. There is deliberately no host-target fallback: a stray
+# `pnpm tauri build` leaves an unnotarized, single-architecture dmg in
+# src-tauri/target/release/bundle/dmg/, and uploading that to a GitHub release
+# ships a broken artifact. The name is pinned to $VERSION rather than matched
+# lexically, so an older dmg left over in the same directory can never be picked
+# up (0.7.3 sorts before 0.8.0).
+UNIVERSAL_DMG_DIR="src-tauri/target/universal-apple-darwin/release/bundle/dmg"
+HOST_DMG_DIR="src-tauri/target/release/bundle/dmg"
+
 find_dmg() {
-  local dmg
-  dmg=$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
-  if [[ -z "$dmg" ]]; then
-    dmg=$(ls src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
+  local dmg="$UNIVERSAL_DMG_DIR/Worktree Manager_${VERSION}_universal.dmg"
+  if [[ -f "$dmg" ]]; then
+    echo "$dmg"
   fi
-  echo "$dmg"
 }
 
 DMG_CHECK=$(find_dmg)
 if [[ -z "$DMG_CHECK" ]]; then
-  echo -e "${RED}✗ Build artifacts not found${NC}"
+  echo -e "${RED}✗ Universal release dmg not found${NC}"
+  echo "  Expected: $UNIVERSAL_DMG_DIR/Worktree Manager_${VERSION}_universal.dmg"
   echo ""
-  echo "Run /build first"
+  if [[ -d "$UNIVERSAL_DMG_DIR" ]]; then
+    echo "  Present in $UNIVERSAL_DMG_DIR:"
+    ls -1 "$UNIVERSAL_DMG_DIR" 2>/dev/null | sed 's/^/    /' || true
+    echo ""
+  fi
+  # Diagnostic only — a host-target dmg is never publishable.
+  if ls "$HOST_DMG_DIR"/*.dmg >/dev/null 2>&1; then
+    echo -e "${YELLOW}  A host-target dmg exists in $HOST_DMG_DIR:${NC}"
+    ls -1 "$HOST_DMG_DIR"/*.dmg 2>/dev/null | sed 's/^/    /' || true
+    echo "  That build is single-architecture and not notarized — it cannot be released."
+    echo ""
+  fi
+  echo "Build the release artifact with:"
+  echo "  ./scripts/release-build.sh"
   exit 2
 fi
 echo -e "${GREEN}✓${NC} Build artifacts found"

@@ -102,19 +102,33 @@ pnpm tauri build --target universal-apple-darwin --bundles app,dmg
 # ---------------------------------------------------------------- artifacts ---
 BUNDLE_DIR="src-tauri/target/universal-apple-darwin/release/bundle"
 APP_PATH="$BUNDLE_DIR/macos/Worktree Manager.app"
-DMG_PATH=""
-if [[ -d "$BUNDLE_DIR/dmg" ]]; then
-  while IFS= read -r f; do DMG_PATH="$f"; break; done \
-    < <(find "$BUNDLE_DIR/dmg" -maxdepth 1 -type f -name '*.dmg' | sort)
+
+# Select the dmg by the version we just built, not lexically: once several
+# versions accumulate in bundle/dmg/, `find | sort | head -1` picks the OLDEST
+# (0.7.3 sorts before 0.8.0) and we would notarize and report a stale artifact.
+VERSION="$(node -p "require('./src-tauri/tauri.conf.json').version" 2>/dev/null || true)"
+if [[ -z "$VERSION" ]]; then
+  echo -e "${RED}✗ Could not read version from src-tauri/tauri.conf.json${NC}" >&2
+  echo "    Tried: node -p \"require('./src-tauri/tauri.conf.json').version\"" >&2
+  exit 1
 fi
+DMG_PATH="$BUNDLE_DIR/dmg/Worktree Manager_${VERSION}_universal.dmg"
 
 echo ""
 if [[ ! -d "$APP_PATH" ]]; then
   echo -e "${RED}✗ .app bundle not found at: $APP_PATH${NC}" >&2
   exit 1
 fi
-if [[ -z "$DMG_PATH" ]]; then
-  echo -e "${RED}✗ No .dmg found under $BUNDLE_DIR/dmg${NC}" >&2
+if [[ ! -f "$DMG_PATH" ]]; then
+  echo -e "${RED}✗ Expected .dmg for version $VERSION not found:${NC}" >&2
+  echo "    $DMG_PATH" >&2
+  echo "" >&2
+  echo "Contents of $BUNDLE_DIR/dmg:" >&2
+  if [[ -d "$BUNDLE_DIR/dmg" ]]; then
+    ls -1 "$BUNDLE_DIR/dmg" >&2 || true
+  else
+    echo "    (directory does not exist)" >&2
+  fi
   exit 1
 fi
 echo -e "${GREEN}✓${NC} Artifacts found"

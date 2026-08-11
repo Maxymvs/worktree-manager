@@ -8,6 +8,10 @@
 #   ./scripts/signing-setup.sh --import   Import the downloaded .cer as a .p12
 #   ./scripts/signing-setup.sh --check    Show codesigning identities + notarytool
 #
+# The email embedded in the generated CSR comes from $SIGNING_EMAIL if set,
+# otherwise from `git config user.email`. Override it with:
+#   SIGNING_EMAIL=you@example.com ./scripts/signing-setup.sh
+#
 # Working files live in the gitignored `signing/` directory at the repo root.
 # Passwords are read interactively and are never echoed, logged, or passed as
 # command-line arguments.
@@ -27,8 +31,10 @@ KEY_FILE="$SIGNING_DIR/developer-id.key"
 CSR_FILE="$SIGNING_DIR/developer-id.csr"
 P12_FILE="$SIGNING_DIR/developer-id.p12"
 
-EMAIL="max@mozartdata.com"
-SUBJECT="/emailAddress=${EMAIL}/CN=Developer ID Application/C=US"
+# Explicit SIGNING_EMAIL wins; otherwise fall back to the local git identity.
+# Only the `generate` path consumes this (--check and --import never do), so it
+# is validated there rather than here.
+EMAIL="${SIGNING_EMAIL:-$(git config user.email 2>/dev/null || true)}"
 
 NOTARYTOOL_FALLBACK="/Library/Developer/CommandLineTools/usr/bin/notarytool"
 
@@ -38,7 +44,7 @@ if [[ $# -gt 0 ]]; then
     --import) mode="import" ;;
     --check)  mode="check" ;;
     -h|--help)
-      sed -n '2,15p' "${BASH_SOURCE[0]}"
+      sed -n '2,19p' "${BASH_SOURCE[0]}"
       exit 0
       ;;
     *)
@@ -75,6 +81,19 @@ case "$mode" in
     ;;
 
   generate)
+    if [[ -z "$EMAIL" ]]; then
+      echo "ERROR: no email address available for the certificate signing request." >&2
+      echo "" >&2
+      echo "Set it explicitly:" >&2
+      echo "  SIGNING_EMAIL=you@example.com ./scripts/signing-setup.sh" >&2
+      echo "" >&2
+      echo "…or configure a git identity so it can be inferred:" >&2
+      echo "  git config user.email you@example.com" >&2
+      exit 1
+    fi
+    SUBJECT="/emailAddress=${EMAIL}/CN=Developer ID Application/C=US"
+    echo "Using email for the CSR: $EMAIL"
+
     mkdir -p "$SIGNING_DIR"
     chmod 700 "$SIGNING_DIR"
 
