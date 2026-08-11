@@ -5,11 +5,18 @@ export interface Worktree {
   isMain: boolean;
   isDetached?: boolean;
   prunable?: boolean;
+  /** Best-effort worktree creation time (epoch ms). */
+  createdAtMs?: number;
   description?: string;
   issueNumber?: string;
   comment?: string;
   repoPath?: string; // Added for edit context
 }
+
+/**
+ * How the worktree list is ordered. Global preference, persisted in settings.
+ */
+export type WorktreeSortMode = 'name' | 'name-desc' | 'newest' | 'oldest' | 'uptime';
 
 export interface Project {
   name: string;

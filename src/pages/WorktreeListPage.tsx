@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback, useMemo } from 'react';
-import { flushSync } from 'react-dom';
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import { flushSync, createPortal } from 'react-dom';
 import {
   DndContext,
   closestCenter,
@@ -21,13 +21,23 @@ import {
   RefreshCw,
   Search,
   X,
+  ArrowUpDown,
+  Check,
 } from 'lucide-react';
 import { message } from '@tauri-apps/plugin-dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { getIDEInfo } from '@/lib/ide-config';
 import * as api from '@/lib/api';
-import type { Project, Worktree, IDEPreset } from '@/types';
+import type { WorktreeDeleteRisk } from '@/lib/api';
+import type { Project, Worktree, IDEPreset, WorktreeSortMode } from '@/types';
+import {
+  WORKTREE_SORT_MODES,
+  WORKTREE_SORT_LABELS,
+  DEFAULT_WORKTREE_SORT,
+  parseWorktreeSortMode,
+} from '@/lib/worktree-sort';
 import { SortableProjectCard } from '@/components/worktree/ProjectCard';
+import type { WorktreeWithIntegrations } from '@/components/worktree/types';
 import { IdeConfirmModal } from '@/components/worktree/modals/IdeConfirmModal';
 import { DeleteWorktreeModals } from '@/components/worktree/modals/DeleteWorktreeModals';
 import { CommentModal } from '@/components/worktree/modals/CommentModal';
@@ -80,14 +90,22 @@ export function WorktreeListPage({
   // Delete worktree modal state
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Worktrees whose deletion is running in the background. The dialog closes as
+  // soon as it's confirmed, so progress is reported inline on the row instead.
+  const [deletingPaths, setDeletingPaths] = useState<Set<string>>(new Set());
   const [deleteModalData, setDeleteModalData] = useState<{
-    worktree: Worktree;
+    worktree: WorktreeWithIntegrations;
     repoPath: string;
+    // The project's default base branch, used to check whether the branch's
+    // commits already landed there via a squash/rebase merge.
+    baseBranch?: string;
   } | null>(null);
   const [deleteBranchToo, setDeleteBranchToo] = useState(false);
-  const [forceDeleteModalOpen, setForceDeleteModalOpen] = useState(false);
-  const [forceDeleting, setForceDeleting] = useState(false);
-  const [forceDeleteError, setForceDeleteError] = useState('');
+  const [stopProcesses, setStopProcesses] = useState(true);
+  // Risk warning: only shown when a delete would discard real work.
+  const [riskModalOpen, setRiskModalOpen] = useState(false);
+  const [riskConfirming, setRiskConfirming] = useState(false);
+  const [deleteRisk, setDeleteRisk] = useState<WorktreeDeleteRisk | null>(null);
   const [errorModalOpen, setErrorModalOpen] = useState(false);
   const [errorModalMessage, setErrorModalMessage] = useState('');
 
@@ -143,6 +161,90 @@ export function WorktreeListPage({
   // Poll for running dev servers, keyed by worktree path.
   const serversByPath = useServerPolling(allWorktreePaths);
 
+  // ---- Worktree sort preference (global, persisted) ----
+  const [sortMode, setSortMode] = useState<WorktreeSortMode>(DEFAULT_WORKTREE_SORT);
+  const sortInitialized = useRef(false);
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const [sortMenuPos, setSortMenuPos] = useState<{ top: number; right: number }>({
+    top: 0,
+    right: 0,
+  });
+  const sortButtonRef = useRef<HTMLButtonElement>(null);
+  const sortMenuRef = useRef<HTMLDivElement>(null);
+
+  // Adopt the persisted preference once, when settings first arrive. Unknown
+  // values (hand-edited settings.json) fall back to the default.
+  useEffect(() => {
+    if (!settings || sortInitialized.current) return;
+    sortInitialized.current = true;
+    setSortMode(parseWorktreeSortMode(settings.worktree_sort));
+  }, [settings]);
+
+  // Close the sort menu on outside click or Escape.
+  useEffect(() => {
+    if (!sortMenuOpen) return;
+
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        sortMenuRef.current && !sortMenuRef.current.contains(target) &&
+        sortButtonRef.current && !sortButtonRef.current.contains(target)
+      ) {
+        setSortMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setSortMenuOpen(false);
+        sortButtonRef.current?.focus();
+      }
+    };
+
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [sortMenuOpen]);
+
+  // Toggles the search bar, mirroring what ⌘F does. Closing also clears the
+  // query so the list isn't left silently filtered by an invisible search.
+  const handleSearchButtonClick = () => {
+    if (searchActive) {
+      setSearchQuery('');
+      setSearchActive(false);
+      return;
+    }
+    setSearchActive(true);
+    // The input autofocuses on mount; this covers a re-focus if it's already
+    // mounted but has lost focus.
+    requestAnimationFrame(() => searchInputRef.current?.focus());
+  };
+
+  const handleSortButtonClick = () => {
+    if (!sortMenuOpen && sortButtonRef.current) {
+      const rect = sortButtonRef.current.getBoundingClientRect();
+      setSortMenuPos({
+        top: rect.bottom + 4,
+        right: Math.max(8, window.innerWidth - rect.right),
+      });
+    }
+    setSortMenuOpen((open) => !open);
+  };
+
+  const handleSelectSort = async (mode: WorktreeSortMode) => {
+    setSortMode(mode);
+    setSortMenuOpen(false);
+    try {
+      await api.setWorktreeSort(mode);
+    } catch (err) {
+      // A failed persist must never break the list — the sort still applies.
+      console.error('Failed to save worktree sort preference:', err);
+    }
+  };
+
   const toggleProject = (repoPath: string) => {
     const next = new Set(expandedProjects);
     if (next.has(repoPath)) {
@@ -197,7 +299,9 @@ export function WorktreeListPage({
   } = useWorktreeKeyboardNav({
     projects,
     expandedProjects,
-    modalOpen: ideModalOpen || deleteModalOpen || forceDeleteModalOpen || errorModalOpen || commentModalOpen,
+    sortMode,
+    serversByPath,
+    modalOpen: ideModalOpen || deleteModalOpen || riskModalOpen || errorModalOpen || commentModalOpen,
     onOpenIde: handleOpenIde,
   });
 
@@ -247,11 +351,17 @@ export function WorktreeListPage({
     }
   };
 
-  const handleDeleteWorktree = (worktree: Worktree, repoPath: string) => {
-    setDeleteModalData({ worktree, repoPath });
+  const handleDeleteWorktree = (
+    worktree: WorktreeWithIntegrations,
+    repoPath: string,
+    baseBranch?: string
+  ) => {
+    setDeleteModalData({ worktree, repoPath, baseBranch });
     // For detached worktrees `branch` holds a SHA, not a real branch, so never
     // offer to delete it.
     setDeleteBranchToo(!worktree.isDetached);
+    setStopProcesses(true);
+    setDeleteRisk(null);
     setDeleteModalOpen(true);
   };
 
@@ -305,46 +415,103 @@ export function WorktreeListPage({
     setCommentTarget(null);
   };
 
-  const executeDeleteWorktree = async (force: boolean = false) => {
+  // Confirm handler for the primary delete dialog. Checks whether the delete
+  // would discard real work; if so it hands off to the risk-warning dialog,
+  // otherwise it deletes straight away (the common, single-dialog path).
+  const handleConfirmDelete = async () => {
+    if (!deleteModalData) return;
+    const { worktree, baseBranch } = deleteModalData;
+
+    flushSync(() => setDeleting(true));
+    try {
+      const risk = await api.getWorktreeDeleteRisk(
+        worktree.path,
+        worktree.branch,
+        deleteBranchToo && !worktree.isDetached,
+        baseBranch
+      );
+      // `unpushed_commits` counts by SHA, so squash- and rebase-merged branches
+      // always look unpushed. Two independent signals prove the work survives
+      // the delete: the backend's content check, and a merged GitHub PR.
+      const prMerged = worktree.prInfo?.merged === true;
+      const commitsAtRisk =
+        risk.unpushed_commits > 0 && !risk.branch_content_merged && !prMerged;
+      // Uncommitted edits are always real, unmerged work — warn regardless.
+      if (risk.has_uncommitted_changes || commitsAtRisk) {
+        // Real work at stake — warn before deleting.
+        setDeleting(false);
+        setDeleteRisk(risk);
+        setDeleteModalOpen(false);
+        setRiskModalOpen(true);
+        return;
+      }
+    } catch (err) {
+      // If we can't assess risk, don't block — fall through and delete.
+      console.warn('Failed to assess delete risk:', err);
+    }
+    await performDelete();
+  };
+
+  // Actually delete the worktree. Always uses git's `--force` (the backend
+  // completes the removal and prunes stale metadata) so untracked files and a
+  // just-stopped dev server can't leave it half-deleted.
+  //
+  // Stopping dev servers and `rm -rf`-ing a worktree takes seconds, so this
+  // returns the user to the list immediately and reports progress inline on
+  // the row instead of holding them in a modal. Everything the background work
+  // needs is captured up front — `closeDeleteModals` resets the dialog state,
+  // so reading it after the await would see cleared values.
+  const performDelete = async () => {
     if (!deleteModalData) return;
     const { worktree, repoPath } = deleteModalData;
+    const alsoDeleteBranch = deleteBranchToo;
+    const shouldStopProcesses =
+      stopProcesses && (serversByPath[worktree.path]?.length ?? 0) > 0;
 
-    // Force React to render loading state before starting operation
-    flushSync(() => {
-      if (force) {
-        setForceDeleting(true);
-      } else {
-        setDeleting(true);
-      }
-    });
+    closeDeleteModals();
+    setDeletingPaths((prev) => new Set(prev).add(worktree.path));
 
     try {
-      await api.removeWorktree(repoPath, worktree.path, force, deleteBranchToo, worktree.branch);
-      setDeleteModalOpen(false);
-      setForceDeleteModalOpen(false);
-      setDeleteModalData(null);
-      setDeleteBranchToo(false);
+      // Stop dev servers / watchers first when opted in — they're what keep
+      // recreating files and cause "Directory not empty". A failure here must
+      // not block the delete; fall through and let git try.
+      if (shouldStopProcesses) {
+        try {
+          await api.stopWorktreeProcesses(worktree.path);
+        } catch (stopErr) {
+          console.warn('Failed to stop worktree processes:', stopErr);
+        }
+      }
+
+      await api.removeWorktree(repoPath, worktree.path, true, alsoDeleteBranch, worktree.branch);
       reload();
     } catch (err) {
       console.error('Failed to delete worktree:', err);
       const errorMessage = err instanceof Error ? err.message : String(err);
-
-      if (!force) {
-        // If normal delete fails, offer force delete
-        setDeleteModalOpen(false);
-        setForceDeleteError(errorMessage);
-        setForceDeleteModalOpen(true);
-      } else {
-        // Force delete also failed
-        setForceDeleteModalOpen(false);
-        setErrorModalMessage(`Failed to force delete worktree: ${errorMessage}`);
-        setErrorModalOpen(true);
-        setDeleteModalData(null);
-      }
+      setErrorModalMessage(`Failed to delete worktree: ${errorMessage}`);
+      setErrorModalOpen(true);
     } finally {
-      setDeleting(false);
-      setForceDeleting(false);
+      // Drop the row out of the deleting state either way: on success `reload`
+      // removes it entirely, on failure it returns to normal so it can be
+      // retried.
+      setDeletingPaths((prev) => {
+        const next = new Set(prev);
+        next.delete(worktree.path);
+        return next;
+      });
     }
+  };
+
+  const closeDeleteModals = () => {
+    setDeleteModalOpen(false);
+    setRiskModalOpen(false);
+    setDeleteModalData(null);
+    setDeleteBranchToo(false);
+    setDeleteRisk(null);
+    // The dialogs are the only consumers of these; clear them here so a
+    // dismissed dialog never reopens still showing a spinner.
+    setDeleting(false);
+    setRiskConfirming(false);
   };
 
   // Check if any worktree has data for optional columns
@@ -353,7 +520,11 @@ export function WorktreeListPage({
   // Only show integration columns if there's actual fetched data
   const hasAnyGitHub = hasGitHub && allWorktrees.some((w) => w.prInfo);
   const hasAnyJira = hasJira && allWorktrees.some((w) => w.jiraInfo || w.issueNumber);
-  const hasAnyServers = allWorktrees.some((w) => (serversByPath[w.path]?.length ?? 0) > 0);
+  // The servers column also hosts the inline "Deleting…" badge, so it has to
+  // render while a delete is in flight even if nothing is listening on a port.
+  const hasAnyServers =
+    deletingPaths.size > 0 ||
+    allWorktrees.some((w) => (serversByPath[w.path]?.length ?? 0) > 0);
 
   return (
     <div className="h-full flex flex-col">
@@ -364,6 +535,53 @@ export function WorktreeListPage({
           Worktree Manager{import.meta.env.VITE_PREVIEW_WORKTREE && ` (${import.meta.env.VITE_PREVIEW_WORKTREE})`}
         </span>
         <div className="flex items-center gap-1 no-drag">
+          <button
+            className={`icon-button-sm${searchActive ? ' icon-button-sm-active' : ''}`}
+            title="Search (⌘F)"
+            aria-label="Search worktrees"
+            aria-pressed={searchActive}
+            onClick={handleSearchButtonClick}
+          >
+            <Search size={14} />
+          </button>
+          <button
+            ref={sortButtonRef}
+            className="icon-button-sm"
+            title="Sort worktrees"
+            aria-label="Sort worktrees"
+            aria-haspopup="menu"
+            aria-expanded={sortMenuOpen}
+            onClick={handleSortButtonClick}
+          >
+            <ArrowUpDown size={14} />
+          </button>
+          {sortMenuOpen && createPortal(
+            <div
+              ref={sortMenuRef}
+              className="sort-menu"
+              role="menu"
+              aria-label="Sort worktrees"
+              style={{ top: sortMenuPos.top, right: sortMenuPos.right }}
+            >
+              {WORKTREE_SORT_MODES.map((mode) => (
+                <button
+                  key={mode}
+                  role="menuitemradio"
+                  aria-checked={sortMode === mode}
+                  className={`sort-menu-item${
+                    sortMode === mode ? ' sort-menu-item-active' : ''
+                  }`}
+                  onClick={() => handleSelectSort(mode)}
+                >
+                  <span className="sort-menu-check">
+                    {sortMode === mode && <Check size={12} />}
+                  </span>
+                  <span>{WORKTREE_SORT_LABELS[mode]}</span>
+                </button>
+              ))}
+            </div>,
+            document.body
+          )}
           <button className="icon-button-sm" onClick={reload} title="Refresh">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
@@ -446,9 +664,11 @@ export function WorktreeListPage({
                   showJira={hasAnyJira}
                   showServers={hasAnyServers}
                   serversByPath={serversByPath}
+                  deletingPaths={deletingPaths}
                   jiraHost={jiraHost}
                   selectedPath={selectedPath}
                   searchQuery={searchQuery}
+                  sortMode={sortMode}
                 />
               ))}
             </SortableContext>
@@ -467,26 +687,27 @@ export function WorktreeListPage({
         onCancel={handleIdeModalCancel}
       />
 
-      {/* Delete Worktree Modals (normal + force + error) */}
+      {/* Delete Worktree Modals (confirm + risk warning + error) */}
       <DeleteWorktreeModals
         data={deleteModalData}
         deleteBranchToo={deleteBranchToo}
         onDeleteBranchTooChange={setDeleteBranchToo}
+        stopProcesses={stopProcesses}
+        onStopProcessesChange={setStopProcesses}
+        runningServers={
+          deleteModalData ? (serversByPath[deleteModalData.worktree.path] ?? []) : []
+        }
         deleteModalOpen={deleteModalOpen}
         onDeleteModalOpenChange={setDeleteModalOpen}
         deleting={deleting}
-        onConfirmDelete={() => executeDeleteWorktree(false)}
-        onCancelDelete={() => setDeleteModalData(null)}
-        forceDeleteModalOpen={forceDeleteModalOpen}
-        onForceDeleteModalOpenChange={setForceDeleteModalOpen}
-        forceDeleteError={forceDeleteError}
-        forceDeleting={forceDeleting}
-        onConfirmForceDelete={() => executeDeleteWorktree(true)}
-        onCancelForceDelete={() => {
-          setForceDeleteModalOpen(false);
-          setDeleteModalData(null);
-          setDeleteBranchToo(false);
-        }}
+        onConfirmDelete={handleConfirmDelete}
+        onCancelDelete={closeDeleteModals}
+        riskModalOpen={riskModalOpen}
+        onRiskModalOpenChange={setRiskModalOpen}
+        deleteRisk={deleteRisk}
+        riskConfirming={riskConfirming}
+        onConfirmRiskDelete={() => performDelete()}
+        onCancelRiskDelete={closeDeleteModals}
         errorModalOpen={errorModalOpen}
         onErrorModalOpenChange={setErrorModalOpen}
         errorModalMessage={errorModalMessage}

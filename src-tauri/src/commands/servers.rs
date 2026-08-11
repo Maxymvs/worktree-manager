@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -305,6 +305,146 @@ pub async fn get_running_servers(
     .map_err(|e| format!("Task failed: {}", e))?
 }
 
+/// A process that `stop_worktree_processes` terminated, for reporting back to
+/// the UI.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StoppedProcess {
+    pub pid: u32,
+    pub process_name: String,
+}
+
+/// From a map of pid -> cwd, return the pids whose cwd is at or inside
+/// `worktree_canon`, excluding `self_pid`. `Path::starts_with` matches on whole
+/// path components, so "/w/feature-a" does not match a sibling "/w/feature-ab".
+fn pids_with_cwd_in_worktree(
+    cwds: &HashMap<u32, PathBuf>,
+    worktree_canon: &Path,
+    self_pid: u32,
+) -> Vec<u32> {
+    let mut pids: Vec<u32> = cwds
+        .iter()
+        .filter(|(pid, cwd)| {
+            **pid != self_pid
+                && **pid > 1
+                && (cwd.as_path() == worktree_canon || cwd.starts_with(worktree_canon))
+        })
+        .map(|(pid, _)| *pid)
+        .collect();
+    pids.sort_unstable();
+    pids
+}
+
+/// Send `signal` (e.g. "TERM", "KILL") to each pid via `kill`. Per-pid failures
+/// (a pid that already exited) are ignored — the batch is best-effort.
+fn signal_pids(signal: &str, pids: &[u32]) {
+    if pids.is_empty() {
+        return;
+    }
+    let mut args = vec![format!("-{}", signal)];
+    args.extend(pids.iter().map(|p| p.to_string()));
+    let _ = Command::new("kill").args(&args).output();
+}
+
+/// True if the process still exists (`kill -0` succeeds).
+fn is_alive(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Poll for the given pids to exit, up to `attempts` times sleeping
+/// `interval_ms` between checks. Returns the pids still alive at the end.
+fn wait_for_exit(pids: &[u32], attempts: u32, interval_ms: u64) -> Vec<u32> {
+    let mut alive: Vec<u32> = pids.to_vec();
+    for i in 0..attempts {
+        alive.retain(|pid| is_alive(*pid));
+        if alive.is_empty() {
+            break;
+        }
+        if i + 1 < attempts {
+            std::thread::sleep(std::time::Duration::from_millis(interval_ms));
+        }
+    }
+    alive
+}
+
+/// Terminate every process whose working directory is inside `worktree_path`.
+///
+/// This exists so the UI can free a worktree before deleting it: a running dev
+/// server or file watcher keeps recreating files, which makes `git worktree
+/// remove` fail with "Directory not empty". Matches processes the same way the
+/// running-server detection does (by cwd), so it also catches watchers/build
+/// steps that don't listen on a port. Sends SIGTERM first, then SIGKILL to any
+/// stragglers, and returns what it stopped. macOS/Unix only.
+#[tauri::command]
+pub async fn stop_worktree_processes(
+    worktree_path: String,
+) -> Result<Vec<StoppedProcess>, String> {
+    tokio::task::spawn_blocking(move || {
+        // Canonicalize so cwd prefix comparisons line up with lsof's resolved
+        // paths; fall back to the raw path if it's already gone.
+        let worktree_canon =
+            std::fs::canonicalize(&worktree_path).unwrap_or_else(|_| PathBuf::from(&worktree_path));
+
+        // Safety: never operate on a root-ish path — that could sweep up the
+        // whole session's processes.
+        if worktree_canon.as_os_str().is_empty() || worktree_canon.parent().is_none() {
+            return Err(format!("refusing to stop processes for '{}'", worktree_path));
+        }
+
+        // List every process's cwd. Like the other lsof passes, non-zero exits
+        // are expected (some fds are uninspectable), so parse stdout regardless.
+        let output = Command::new("lsof")
+            .args(["-nP", "-d", "cwd", "-Fpn"])
+            .output()
+            .map_err(|e| format!("Failed to run lsof: {}", e))?;
+        let cwds = parse_lsof_cwds(&String::from_utf8_lossy(&output.stdout));
+
+        let pids = pids_with_cwd_in_worktree(&cwds, &worktree_canon, std::process::id());
+        if pids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Capture names before killing (best-effort; ps may miss exited pids).
+        let pids_csv = pids
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let names = match Command::new("ps")
+            .args(["-p", &pids_csv, "-o", "pid=,etime=,comm="])
+            .output()
+        {
+            Ok(ps) => parse_ps(&String::from_utf8_lossy(&ps.stdout)),
+            Err(_) => HashMap::new(),
+        };
+
+        // Graceful terminate (~2s), then force-kill any survivors.
+        signal_pids("TERM", &pids);
+        let survivors = wait_for_exit(&pids, 20, 100);
+        if !survivors.is_empty() {
+            signal_pids("KILL", &survivors);
+            let _ = wait_for_exit(&survivors, 10, 100);
+        }
+
+        let stopped = pids
+            .iter()
+            .map(|pid| StoppedProcess {
+                pid: *pid,
+                process_name: names
+                    .get(pid)
+                    .map(|(name, _)| name.clone())
+                    .unwrap_or_else(|| "unknown".to_string()),
+            })
+            .collect();
+        Ok(stopped)
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,6 +696,35 @@ mod tests {
         assert_eq!((servers[0].worktree_path.as_str(), servers[0].port), ("/tmp/wt/a", 8004));
         assert_eq!((servers[1].worktree_path.as_str(), servers[1].port), ("/tmp/wt/b", 3000));
         assert_eq!((servers[2].worktree_path.as_str(), servers[2].port), ("/tmp/wt/b", 5178));
+    }
+
+    #[test]
+    fn test_pids_with_cwd_in_worktree_matches_and_excludes_self() {
+        let mut cwds = HashMap::new();
+        cwds.insert(100, PathBuf::from("/tmp/wt/feature-a")); // cwd == worktree
+        cwds.insert(101, PathBuf::from("/tmp/wt/feature-a/packages/web")); // nested
+        cwds.insert(102, PathBuf::from("/tmp/other")); // outside
+        cwds.insert(200, PathBuf::from("/tmp/wt/feature-a")); // this is "self"
+
+        let pids = pids_with_cwd_in_worktree(&cwds, Path::new("/tmp/wt/feature-a"), 200);
+        assert_eq!(pids, vec![100, 101]);
+    }
+
+    #[test]
+    fn test_pids_with_cwd_in_worktree_no_sibling_prefix_match() {
+        // Component-wise: "/tmp/wt/feature-a" must NOT match "/tmp/wt/feature-ab".
+        let mut cwds = HashMap::new();
+        cwds.insert(100, PathBuf::from("/tmp/wt/feature-ab"));
+        let pids = pids_with_cwd_in_worktree(&cwds, Path::new("/tmp/wt/feature-a"), 0);
+        assert!(pids.is_empty());
+    }
+
+    #[test]
+    fn test_pids_with_cwd_in_worktree_skips_pid_1() {
+        let mut cwds = HashMap::new();
+        cwds.insert(1, PathBuf::from("/tmp/wt/feature-a"));
+        let pids = pids_with_cwd_in_worktree(&cwds, Path::new("/tmp/wt/feature-a"), 999);
+        assert!(pids.is_empty());
     }
 
     #[test]

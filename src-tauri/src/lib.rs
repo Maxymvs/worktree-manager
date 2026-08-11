@@ -15,16 +15,17 @@ use commands::settings::{
     set_clipboard_parse_patterns, set_copy_paths, set_default_worktree_template,
     set_fetch_before_create, set_global_shortcut, set_ide, set_last_used_project,
     set_launch_at_startup, set_onboarding_completed, set_refresh_interval_minutes,
-    set_skip_open_ide_confirm, set_theme, set_worktree_memo,
+    set_skip_open_ide_confirm, set_theme, set_worktree_memo, set_worktree_sort,
 };
 use commands::projects::{add_project, get_projects, remove_project, reorder_projects, update_project};
 use commands::git::{
     get_worktrees, create_worktree, create_worktree_existing_branch, remove_worktree,
-    prune_worktrees, get_worktree_status, get_branches, get_current_branch, get_default_branch,
+    prune_worktrees, get_worktree_status, get_worktree_delete_risk, get_branches,
+    get_current_branch, get_default_branch,
     delete_branch, rename_branch, git_fetch, git_pull, get_github_remote_info, open_ide,
     open_in_finder, open_terminal, copy_paths_to_worktree,
 };
-use commands::servers::get_running_servers;
+use commands::servers::{get_running_servers, stop_worktree_processes};
 use commands::clipboard::read_clipboard_text;
 use commands::integrations::{
     get_github_config, set_github_config, remove_github_config, validate_github_token,
@@ -113,6 +114,7 @@ pub fn run() {
             set_last_used_project,
             set_refresh_interval_minutes,
             set_skip_open_ide_confirm,
+            set_worktree_sort,
             set_onboarding_completed,
             get_worktree_memo,
             set_worktree_memo,
@@ -130,8 +132,10 @@ pub fn run() {
             remove_worktree,
             prune_worktrees,
             get_worktree_status,
+            get_worktree_delete_risk,
             // Servers
             get_running_servers,
+            stop_worktree_processes,
             // Git - Branches
             get_branches,
             get_current_branch,

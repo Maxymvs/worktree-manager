@@ -103,6 +103,11 @@ html, body, #root {
   background: hsl(var(--secondary));
   color: hsl(var(--foreground));
 }
+/* Toggled-on state, e.g. the search button while the search bar is open. */
+.icon-button-sm-active {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
 
 /* Search Bar */
 .search-bar {
@@ -240,6 +245,24 @@ html, body, #root {
 }
 .worktree-row-selected:hover { background: hsl(var(--accent) / 0.8); }
 
+/* A worktree whose deletion is running in the background: dimmed and inert,
+   but still readable so the user can see which one is going away. */
+.worktree-row-deleting {
+  @apply cursor-default;
+  opacity: 0.55;
+}
+.worktree-row-deleting:hover,
+.worktree-row-deleting:active { background: transparent; }
+
+.worktree-deleting-badge {
+  @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium whitespace-nowrap;
+  background: hsl(var(--destructive) / 0.15);
+  color: hsl(var(--destructive));
+}
+@media (prefers-reduced-motion: no-preference) {
+  .worktree-deleting-spinner { @apply animate-spin; }
+}
+
 .worktree-col-branch { @apply flex items-center gap-1.5 pr-3; }
 .worktree-col-description { @apply min-w-0 px-2 truncate text-muted-foreground text-xs; }
 .worktree-col-github { @apply w-[80px] flex justify-center; }
@@ -336,6 +359,8 @@ html, body, #root {
   color: hsl(var(--muted-foreground));
   border-top: 1px solid hsl(var(--border));
 }
+/* Worktree creation time, shown above the "Click to open" hint. */
+.server-hover-created { @apply mb-0.5; color: hsl(var(--foreground) / 0.75); }
 
 /* Legacy integration-link (for backwards compat) */
 .integration-link {
@@ -383,6 +408,31 @@ html, body, #root {
   background: hsl(var(--border));
 }
 
+/* Titlebar sort menu — same portal/fixed idiom as the row action dropdown. */
+.sort-menu {
+  @apply fixed py-1 rounded-lg shadow-lg min-w-[170px];
+  z-index: 9999;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+}
+.sort-menu-item {
+  @apply w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left transition-colors;
+  color: hsl(var(--foreground));
+}
+.sort-menu-item:hover {
+  background: hsl(var(--accent));
+}
+.sort-menu-item:focus-visible {
+  @apply outline-none ring-2 ring-inset;
+  --tw-ring-color: hsl(var(--ring));
+}
+.sort-menu-item-active {
+  color: hsl(var(--primary));
+}
+.sort-menu-check {
+  @apply w-3 flex-shrink-0 flex items-center justify-center;
+}
+
 .worktree-branch-icon { @apply text-muted-foreground flex-shrink-0; }
 .worktree-branch-name { @apply font-mono text-xs truncate; }
 .worktree-branch-detached { @apply font-mono text-xs italic truncate text-muted-foreground; }
@@ -394,6 +444,17 @@ html, body, #root {
 .dark .worktree-prunable-badge {
   background: hsl(38 92% 50% / 0.2);
   color: hsl(38 95% 60%);
+}
+/* Neutral counterpart to the main/stale badges: marks a detached-HEAD worktree
+   that isn't on any branch. */
+.worktree-detached-badge {
+  @apply px-1 py-0.5 text-[9px] font-medium rounded flex-shrink-0;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+.dark .worktree-detached-badge {
+  background: hsl(var(--muted) / 0.7);
+  color: hsl(var(--muted-foreground));
 }
 .worktree-main-badge {
   @apply px-1 py-0.5 text-[9px] font-medium rounded flex-shrink-0;

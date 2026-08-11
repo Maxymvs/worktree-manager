@@ -1,9 +1,15 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type { ProjectWithIntegrations } from '@/components/worktree/types';
+import type { WorktreeSortMode } from '@/types';
+import type { RunningServer } from '@/lib/api';
+import { sortWorktrees } from '@/lib/worktree-sort';
 
 interface UseWorktreeKeyboardNavOptions {
   projects: ProjectWithIntegrations[];
   expandedProjects: Set<string>;
+  /** Must match the order rendered by ProjectCard so arrows follow the rows. */
+  sortMode: WorktreeSortMode;
+  serversByPath: Record<string, RunningServer[]>;
   /** True while any modal is open; keyboard navigation is suppressed. */
   modalOpen: boolean;
   /** Invoked when Enter opens the selected worktree in the IDE. */
@@ -33,6 +39,8 @@ interface UseWorktreeKeyboardNavResult {
 export function useWorktreeKeyboardNav({
   projects,
   expandedProjects,
+  sortMode,
+  serversByPath,
   modalOpen,
   onOpenIde,
 }: UseWorktreeKeyboardNavOptions): UseWorktreeKeyboardNavResult {
@@ -74,11 +82,7 @@ export function useWorktreeKeyboardNav({
     for (const project of projects) {
       if (!expandedProjects.has(project.repoPath)) continue;
 
-      const sortedWorktrees = [...project.worktrees].sort((a, b) => {
-        if (a.isMain && !b.isMain) return -1;
-        if (!a.isMain && b.isMain) return 1;
-        return a.branch.localeCompare(b.branch);
-      });
+      const sortedWorktrees = sortWorktrees(project.worktrees, sortMode, serversByPath);
 
       for (const worktree of sortedWorktrees) {
         // Filter by search query
@@ -92,7 +96,7 @@ export function useWorktreeKeyboardNav({
     }
 
     return result;
-  }, [projects, expandedProjects, searchQuery]);
+  }, [projects, expandedProjects, searchQuery, sortMode, serversByPath]);
 
   // Keyboard navigation handler
   const handleKeyDown = useCallback((e: KeyboardEvent) => {

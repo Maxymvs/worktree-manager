@@ -6,6 +6,7 @@ import { ConfirmModal } from '@/components/ui/confirm-modal';
 import { AlertModal } from '@/components/ui/alert-modal';
 import { useKeyboardShortcut } from '@/hooks/useKeyboardShortcut';
 import * as api from '@/lib/api';
+import type { WorktreeDeleteRisk } from '@/lib/api';
 import type { Worktree } from '@/types';
 
 interface EditWorktreePageProps {
@@ -27,9 +28,11 @@ export function EditWorktreePage({ worktree, onBack, onSaved }: EditWorktreePage
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteBranchToo, setDeleteBranchToo] = useState(false);
-  const [forceDeleteModalOpen, setForceDeleteModalOpen] = useState(false);
-  const [forceDeleting, setForceDeleting] = useState(false);
-  const [forceDeleteError, setForceDeleteError] = useState('');
+  const [stopProcesses, setStopProcesses] = useState(true);
+  // Risk warning: only shown when a delete would discard real work.
+  const [riskModalOpen, setRiskModalOpen] = useState(false);
+  const [riskConfirming, setRiskConfirming] = useState(false);
+  const [deleteRisk, setDeleteRisk] = useState<WorktreeDeleteRisk | null>(null);
   const [errorModalOpen, setErrorModalOpen] = useState(false);
   const [errorModalMessage, setErrorModalMessage] = useState('');
 
@@ -86,47 +89,90 @@ export function EditWorktreePage({ worktree, onBack, onSaved }: EditWorktreePage
   const handleDelete = () => {
     if (!repoPath) return;
     setDeleteBranchToo(true);
+    setDeleteRisk(null);
     setDeleteModalOpen(true);
   };
 
-  const executeDelete = async (force: boolean = false) => {
+  // Confirm handler for the primary delete dialog: warn only if the delete
+  // would discard real work, otherwise delete straight away.
+  const handleConfirmDelete = async () => {
     if (!repoPath) return;
 
-    // Force React to render loading state before starting operation
-    flushSync(() => {
-      if (force) {
-        setForceDeleting(true);
-      } else {
-        setDeleting(true);
+    flushSync(() => setDeleting(true));
+    try {
+      const risk = await api.getWorktreeDeleteRisk(
+        worktree.path,
+        worktree.branch,
+        deleteBranchToo && !worktree.isDetached
+      );
+      // Commits that were squash-/rebase-merged only look unpushed (their SHAs
+      // were rewritten); the backend's content check proves the work survives.
+      if (
+        risk.has_uncommitted_changes ||
+        (risk.unpushed_commits > 0 && !risk.branch_content_merged)
+      ) {
+        setDeleting(false);
+        setDeleteRisk(risk);
+        setDeleteModalOpen(false);
+        setRiskModalOpen(true);
+        return;
       }
-    });
+    } catch (err) {
+      console.warn('Failed to assess delete risk:', err);
+    }
+    await performDelete(false);
+  };
+
+  // Always force-removes (the backend completes the removal and prunes stale
+  // metadata) so untracked files / a just-stopped dev server can't leave the
+  // worktree half-deleted. `fromRiskModal` only selects the loading state.
+  const performDelete = async (fromRiskModal: boolean) => {
+    if (!repoPath) return;
+
+    flushSync(() => (fromRiskModal ? setRiskConfirming(true) : setDeleting(true)));
 
     try {
-      await api.removeWorktree(repoPath, worktree.path, force, deleteBranchToo, worktree.branch);
+      // Stop dev servers / watchers first when requested — they're what keep
+      // recreating files and cause "Directory not empty". A failure here must
+      // not block the delete; fall through and let git try.
+      if (stopProcesses) {
+        try {
+          await api.stopWorktreeProcesses(worktree.path);
+        } catch (stopErr) {
+          console.warn('Failed to stop worktree processes:', stopErr);
+        }
+      }
+
+      await api.removeWorktree(repoPath, worktree.path, true, deleteBranchToo, worktree.branch);
       onSaved();
       onBack();
     } catch (err) {
       console.error('Failed to delete worktree:', err);
       const errorMessage = err instanceof Error ? err.message : String(err);
-
-      if (!force) {
-        // Close the delete modal and offer force delete
-        setDeleteModalOpen(false);
-        setForceDeleteError(errorMessage);
-        setForceDeleteModalOpen(true);
-      } else {
-        // Force delete also failed
-        setForceDeleteModalOpen(false);
-        setErrorModalMessage(`Failed to force delete worktree: ${errorMessage}`);
-        setErrorModalOpen(true);
-      }
+      setDeleteModalOpen(false);
+      setRiskModalOpen(false);
+      setErrorModalMessage(`Failed to delete worktree: ${errorMessage}`);
+      setErrorModalOpen(true);
     } finally {
       setDeleting(false);
-      setForceDeleting(false);
+      setRiskConfirming(false);
     }
   };
 
   const isMainBranch = worktree.isMain;
+
+  const riskDescription = (() => {
+    const parts: string[] = [];
+    if (deleteRisk?.has_uncommitted_changes) parts.push('uncommitted changes');
+    if (deleteRisk && deleteRisk.unpushed_commits > 0) {
+      const n = deleteRisk.unpushed_commits;
+      parts.push(`${n} unpushed commit${n === 1 ? '' : 's'} on "${worktree.branch}"`);
+    }
+    const what = parts.length > 0 ? parts.join(' and ') : 'unsaved work';
+    return `This worktree has ${what} that exist nowhere else.\n\nDeleting will permanently discard ${
+      parts.length > 1 ? 'them' : 'it'
+    }. This cannot be undone.`;
+  })();
 
   return (
     <div className="h-full flex flex-col">
@@ -252,8 +298,8 @@ export function EditWorktreePage({ worktree, onBack, onSaved }: EditWorktreePage
         description={`Are you sure you want to delete the worktree "${worktree.branch}"?\n\nThis will remove the worktree directory and its contents.`}
         confirmLabel={deleteBranchToo ? 'Delete Worktree & Branch' : 'Delete'}
         variant="destructive"
-        onConfirm={() => executeDelete(false)}
-        onCancel={() => {}}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeleteRisk(null)}
         loading={deleting}
         loadingLabel="Deleting..."
       >
@@ -264,21 +310,30 @@ export function EditWorktreePage({ worktree, onBack, onSaved }: EditWorktreePage
             onChange={(e) => setDeleteBranchToo(e.target.checked)}
             className="w-4 h-4 rounded border-input bg-background text-primary focus:ring-primary focus:ring-offset-0"
           />
-          <span className="text-sm text-foreground">Also delete local branch</span>
+          <span className="text-sm text-foreground">Delete local branch</span>
+        </label>
+        <label className="flex items-center gap-2 mt-3 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={stopProcesses}
+            onChange={(e) => setStopProcesses(e.target.checked)}
+            className="w-4 h-4 rounded border-input bg-background text-primary focus:ring-primary focus:ring-offset-0"
+          />
+          <span className="text-sm text-foreground">Stop any processes running in this worktree</span>
         </label>
       </ConfirmModal>
 
-      {/* Force Delete Confirmation Modal */}
+      {/* Risk warning — only shown when the delete would discard real work. */}
       <ConfirmModal
-        open={forceDeleteModalOpen}
-        onOpenChange={setForceDeleteModalOpen}
-        title="Force Delete Worktree"
-        description={`The worktree could not be deleted normally:\n\n${forceDeleteError}\n\nDo you want to force delete it? This cannot be undone.`}
-        confirmLabel={deleteBranchToo ? 'Force Delete & Branch' : 'Force Delete'}
+        open={riskModalOpen}
+        onOpenChange={setRiskModalOpen}
+        title="Delete worktree with unsaved work?"
+        description={riskDescription}
+        confirmLabel={deleteBranchToo ? 'Delete Anyway & Branch' : 'Delete Anyway'}
         variant="destructive"
-        onConfirm={() => executeDelete(true)}
-        onCancel={() => setDeleteBranchToo(false)}
-        loading={forceDeleting}
+        onConfirm={() => performDelete(true)}
+        onCancel={() => setDeleteRisk(null)}
+        loading={riskConfirming}
         loadingLabel="Deleting..."
       >
         <label className="flex items-center gap-2 mt-4 cursor-pointer select-none">
@@ -288,7 +343,16 @@ export function EditWorktreePage({ worktree, onBack, onSaved }: EditWorktreePage
             onChange={(e) => setDeleteBranchToo(e.target.checked)}
             className="w-4 h-4 rounded border-input bg-background text-primary focus:ring-primary focus:ring-offset-0"
           />
-          <span className="text-sm text-foreground">Also delete local branch</span>
+          <span className="text-sm text-foreground">Delete local branch</span>
+        </label>
+        <label className="flex items-center gap-2 mt-3 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={stopProcesses}
+            onChange={(e) => setStopProcesses(e.target.checked)}
+            className="w-4 h-4 rounded border-input bg-background text-primary focus:ring-primary focus:ring-offset-0"
+          />
+          <span className="text-sm text-foreground">Stop any processes running in this worktree</span>
         </label>
       </ConfirmModal>
 

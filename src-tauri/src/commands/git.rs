@@ -2,6 +2,7 @@ use git2::{BranchType, Repository};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Worktree {
@@ -13,6 +14,11 @@ pub struct Worktree {
     pub is_detached: bool,
     #[serde(default)]
     pub prunable: bool,
+    /// Best-effort creation time (epoch milliseconds) of the worktree, derived
+    /// from filesystem birthtime. `None` when it can't be determined — the
+    /// pure parser never fills this in (see `worktree_created_at`).
+    #[serde(default)]
+    pub created_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -45,7 +51,103 @@ pub fn get_worktrees(repo_path: String) -> Result<Vec<Worktree>, String> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_worktree_list(&stdout))
+    let mut worktrees = parse_worktree_list(&stdout);
+
+    // Enrich with filesystem-derived creation times. Kept out of the parser so
+    // it stays pure/testable; every lookup here is best-effort.
+    for wt in worktrees.iter_mut() {
+        wt.created_at_ms = worktree_created_at(&repo_path, wt);
+    }
+
+    Ok(worktrees)
+}
+
+/// Convert a `SystemTime` into epoch milliseconds, or `None` for pre-epoch /
+/// unrepresentable values.
+fn system_time_to_ms(time: SystemTime) -> Option<u64> {
+    time.duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as u64)
+}
+
+/// Birthtime (in epoch ms) of `path`, or `None` when unavailable (unsupported
+/// filesystem, missing path, permission error).
+fn created_at_ms_of(path: impl AsRef<Path>) -> Option<u64> {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.created().ok())
+        .and_then(system_time_to_ms)
+}
+
+/// Pure parser for the contents of a linked worktree's `.git` file, which looks
+/// like `gitdir: /path/to/repo/.git/worktrees/<name>` (with a trailing newline).
+/// Returns the admin directory path, or `None` if the line is missing/empty.
+fn parse_gitdir_file(contents: &str) -> Option<&str> {
+    contents
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("gitdir:"))
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+}
+
+/// Best-effort creation time (epoch ms) for a worktree.
+///
+/// * Main worktree: birthtime of `<path>/.git`, falling back to `<path>`.
+/// * Linked worktree: birthtime of its admin dir under
+///   `<repo>/.git/worktrees/<name>` — resolved via the worktree's own `.git`
+///   file, or (when the folder is gone, e.g. prunable entries) by scanning the
+///   repo's `worktrees/*/gitdir` files for one pointing back at this worktree.
+///   Falls back to the worktree path itself.
+///
+/// Never panics; any failure collapses to `None`.
+fn worktree_created_at(repo_path: &str, wt: &Worktree) -> Option<u64> {
+    let wt_path = Path::new(&wt.path);
+    let dot_git = wt_path.join(".git");
+
+    if wt.is_main {
+        return created_at_ms_of(&dot_git).or_else(|| created_at_ms_of(wt_path));
+    }
+
+    // (a) Read the worktree's `.git` file to find its admin directory.
+    if let Ok(contents) = std::fs::read_to_string(&dot_git) {
+        if let Some(admin) = parse_gitdir_file(&contents) {
+            if let Some(ms) = created_at_ms_of(admin) {
+                return Some(ms);
+            }
+        }
+    }
+
+    // (b) Folder gone (prunable): scan the repo's worktree admin dirs for the
+    // `gitdir` file that points back at this worktree's `.git`.
+    if let Some(ms) = scan_admin_dirs_for(repo_path, &dot_git) {
+        return Some(ms);
+    }
+
+    // (c) Last resort: the worktree directory itself.
+    created_at_ms_of(wt_path)
+}
+
+/// Scan `<repo_path>/.git/worktrees/*/gitdir` for an entry whose recorded path
+/// equals `target_dot_git`, returning that admin dir's birthtime in epoch ms.
+fn scan_admin_dirs_for(repo_path: &str, target_dot_git: &Path) -> Option<u64> {
+    let worktrees_dir = Path::new(repo_path).join(".git").join("worktrees");
+    let entries = std::fs::read_dir(&worktrees_dir).ok()?;
+
+    for entry in entries.flatten() {
+        let admin_dir = entry.path();
+        let Ok(recorded) = std::fs::read_to_string(admin_dir.join("gitdir")) else {
+            continue;
+        };
+        let recorded = recorded.trim();
+        if recorded.is_empty() {
+            continue;
+        }
+        if Path::new(recorded) == target_dot_git {
+            return created_at_ms_of(&admin_dir);
+        }
+    }
+
+    None
 }
 
 /// Per-entry accumulator while parsing `git worktree list --porcelain` output.
@@ -91,6 +193,8 @@ fn parse_worktree_list(stdout: &str) -> Vec<Worktree> {
             is_bare: entry.is_bare,
             is_detached: entry.is_detached,
             prunable: entry.prunable,
+            // Filesystem lookup happens in `get_worktrees`; the parser is pure.
+            created_at_ms: None,
         });
 
         *entry = WorktreeEntry::default();
@@ -199,7 +303,24 @@ pub async fn remove_worktree(
             .map_err(|e| format!("Failed to run git: {}", e))?;
 
         if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+            // A non-force removal that fails should surface the error so the
+            // caller can offer a force delete instead.
+            if !force {
+                return Err(stderr);
+            }
+
+            // `git worktree remove` deletes its bookkeeping under
+            // `.git/worktrees/<id>` *before* it removes the working directory.
+            // If that directory removal fails part-way (commonly a running dev
+            // server or file watcher is still writing inside it, surfacing as
+            // "Directory not empty"), git has already forgotten the worktree —
+            // so a `--force` retry aborts with "is not a working tree" and
+            // leaves both the directory and the branch behind. When forcing,
+            // finish the removal ourselves.
+            force_cleanup_worktree(&repo_path, &worktree_path)
+                .map_err(|cleanup_err| format!("{}\n{}", stderr.trim_end(), cleanup_err))?;
         }
 
         // Delete the branch after worktree removal if requested
@@ -243,6 +364,66 @@ pub async fn remove_worktree(
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?
+}
+
+/// Finish removing a worktree that `git worktree remove --force` could not.
+///
+/// `git worktree remove` deletes the administrative entry under
+/// `.git/worktrees/<id>` before it removes the working-tree directory, so a
+/// part-way failure (e.g. "Directory not empty" from a still-running dev
+/// server) leaves git with no record of the worktree while the directory — and
+/// its branch — remain. This best-effort cleanup deletes the leftover directory
+/// itself and prunes any stale bookkeeping, so the caller's branch deletion can
+/// still run and `git worktree list` stays consistent.
+fn force_cleanup_worktree(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    // Guard against nuking something that isn't a linked worktree directory.
+    if worktree_path.trim().is_empty() || worktree_path == repo_path {
+        return Err(format!("refusing to force-delete '{}'", worktree_path));
+    }
+
+    // Remove the leftover directory. Retry a few times: the usual cause of the
+    // original failure is another process recreating files mid-delete, which is
+    // often transient.
+    let mut last_err = None;
+    for attempt in 0..3 {
+        match std::fs::remove_dir_all(worktree_path) {
+            // Success, or already gone (git got it, or a prior attempt did).
+            Ok(()) => {
+                last_err = None;
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                last_err = None;
+                break;
+            }
+            Err(e) => {
+                last_err = Some(e);
+                if attempt < 2 {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+    }
+    if let Some(e) = last_err {
+        return Err(format!(
+            "failed to delete worktree directory '{}': {} \
+             — a process (e.g. a running dev server) may still be using it; \
+             stop it and try again",
+            worktree_path, e
+        ));
+    }
+
+    // Prune the stale worktree metadata so `git worktree list` is consistent.
+    let output = Command::new("git")
+        .args(["worktree", "prune"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("failed to prune worktrees: {}", e))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -301,6 +482,158 @@ pub fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus, Stri
         staged,
         unstaged,
         untracked,
+    })
+}
+
+/// What a delete would irreversibly discard. Used to decide whether to warn
+/// before deleting: untracked files (build output, node_modules) are *not*
+/// counted as risk — only uncommitted changes to tracked files and commits that
+/// exist nowhere but locally.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WorktreeDeleteRisk {
+    /// Tracked files with staged or unstaged modifications.
+    pub has_uncommitted_changes: bool,
+    /// Commits on the branch not reachable from any remote-tracking branch, so
+    /// `git branch -D` would lose them. 0 when the branch isn't being deleted.
+    pub unpushed_commits: i32,
+    /// True when every file the branch changed is already byte-identical in the
+    /// base branch — the work was squash- or rebase-merged, so the commits only
+    /// *look* unpushed.
+    pub branch_content_merged: bool,
+}
+
+/// Count commits on `branch` that aren't reachable from any remote-tracking
+/// branch — i.e. commits that only exist locally and would be lost on delete.
+/// Lenient: any failure returns 0 (don't block a delete on an unknowable state).
+fn count_unpushed_commits(worktree_path: &str, branch: &str) -> i32 {
+    let output = Command::new("git")
+        .args(["rev-list", "--count", branch, "--not", "--remotes"])
+        .current_dir(worktree_path)
+        .output();
+    match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<i32>()
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// Resolve the ref to compare the branch's *content* against, trying the most
+/// specific source first. Returns the first candidate git can resolve to a
+/// commit, or `None` when nothing usable exists.
+///
+/// 1. the branch's own upstream (`<branch>@{upstream}`),
+/// 2. the caller-supplied base branch — as given (e.g. `origin/dev`) and, if
+///    that doesn't resolve, prefixed with `origin/` (the setting often omits
+///    the remote),
+/// 3. `origin/HEAD`.
+fn resolve_base_ref(worktree_path: &str, branch: &str, base_branch: Option<&str>) -> Option<String> {
+    let mut candidates: Vec<String> = vec![format!("{}@{{upstream}}", branch)];
+    if let Some(base) = base_branch {
+        let base = base.trim();
+        if !base.is_empty() {
+            candidates.push(base.to_string());
+            if !base.contains('/') {
+                candidates.push(format!("origin/{}", base));
+            }
+        }
+    }
+    candidates.push("origin/HEAD".to_string());
+
+    candidates
+        .into_iter()
+        .find(|candidate| ref_resolves(worktree_path, candidate))
+}
+
+/// True when `reference` names an existing commit in this repository.
+fn ref_resolves(worktree_path: &str, reference: &str) -> bool {
+    Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet"])
+        .arg(format!("{}^{{commit}}", reference))
+        .current_dir(worktree_path)
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
+/// True when merging `branch` into `base` would change nothing — every change
+/// the branch carries is already present in `base`. This is the signature of a
+/// squash or rebase merge: the commit SHAs differ, so reachability-based checks
+/// report "unpushed" commits, but the content itself landed.
+///
+/// Uses `git merge-tree --write-tree` (git 2.38+), which performs a real merge
+/// in memory and prints the resulting tree. If that tree equals the base's own
+/// tree, the branch contributes nothing. Comparing individual files instead
+/// would give the wrong answer as soon as `base` moves on and edits the same
+/// files — which, on an active repo, is almost immediately.
+///
+/// Deliberately conservative: a merge conflict, a git too old to support
+/// `--write-tree`, or any other failure returns `false` (i.e. keep warning)
+/// rather than silently suppressing a real one.
+fn branch_content_is_merged(worktree_path: &str, branch: &str, base: &str) -> bool {
+    let merged_tree = match Command::new("git")
+        .args(["merge-tree", "--write-tree", base, branch])
+        .current_dir(worktree_path)
+        .output()
+    {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _ => return false,
+    };
+    if merged_tree.is_empty() {
+        return false;
+    }
+
+    let base_tree = match Command::new("git")
+        .arg("rev-parse")
+        .arg(format!("{}^{{tree}}", base))
+        .current_dir(worktree_path)
+        .output()
+    {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _ => return false,
+    };
+
+    !base_tree.is_empty() && merged_tree == base_tree
+}
+
+/// Report what deleting this worktree (and optionally its branch) would
+/// irreversibly discard, so the UI can warn only when real work is at risk.
+///
+/// `base_branch` is the project's configured base (e.g. `origin/dev`); it's
+/// used only to verify, by content, whether "unpushed" commits were actually
+/// squash- or rebase-merged already.
+#[tauri::command]
+pub fn get_worktree_delete_risk(
+    worktree_path: String,
+    branch: Option<String>,
+    check_branch: bool,
+    base_branch: Option<String>,
+) -> Result<WorktreeDeleteRisk, String> {
+    let status = get_worktree_status(worktree_path.clone())?;
+
+    let branch = match (check_branch, branch) {
+        (true, Some(branch)) => Some(branch),
+        _ => None,
+    };
+
+    let unpushed_commits = match &branch {
+        Some(branch) => count_unpushed_commits(&worktree_path, branch),
+        None => 0,
+    };
+
+    // Only worth the extra git work when the SHA-based count claims risk.
+    let branch_content_merged = match (&branch, unpushed_commits > 0) {
+        (Some(branch), true) => resolve_base_ref(&worktree_path, branch, base_branch.as_deref())
+            .map(|base| branch_content_is_merged(&worktree_path, branch, &base))
+            .unwrap_or(false),
+        _ => false,
+    };
+
+    Ok(WorktreeDeleteRisk {
+        has_uncommitted_changes: status.staged > 0 || status.unstaged > 0,
+        unpushed_commits,
+        branch_content_merged,
     })
 }
 
@@ -883,6 +1216,80 @@ mod tests {
         assert_eq!(worktrees.len(), 1);
     }
 
+    // Reproduces the partial-failure state that used to dead-end a force delete:
+    // `git worktree remove` deletes its `.git/worktrees/<id>` bookkeeping before
+    // it removes the working directory, so a mid-delete failure ("Directory not
+    // empty") leaves git with no record of the worktree while the directory and
+    // branch remain. A `--force` retry then failed with "is not a working tree".
+    // The force path must recover: remove the leftover directory and the branch.
+    #[tokio::test]
+    async fn test_force_remove_worktree_with_missing_metadata() {
+        let (temp_dir, repo_path) = setup_test_repo();
+        let worktree_path = temp_dir.path().join("worktrees/orphaned-wt");
+
+        create_worktree(
+            repo_path.clone(),
+            worktree_path.to_string_lossy().to_string(),
+            "orphaned-wt".to_string(),
+            "main".to_string(),
+        )
+        .await
+        .expect("Failed to create worktree");
+
+        // Simulate git's partial removal: drop the admin metadata, keep the dir.
+        let git_link =
+            fs::read_to_string(worktree_path.join(".git")).expect("Failed to read .git file");
+        let gitdir = git_link
+            .trim()
+            .strip_prefix("gitdir:")
+            .expect("unexpected .git file format")
+            .trim();
+        fs::remove_dir_all(gitdir).expect("Failed to remove worktree metadata");
+
+        // git no longer tracks it, but the directory and branch remain.
+        let worktrees = get_worktrees(repo_path.clone()).expect("Failed to get worktrees");
+        assert_eq!(worktrees.len(), 1, "worktree metadata should be gone");
+        assert!(worktree_path.exists(), "leftover directory should remain");
+
+        // A plain --force retry can't work here — confirm the precondition.
+        let retry = Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&worktree_path)
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to run git");
+        assert!(!retry.status.success(), "plain --force should fail here");
+
+        // Force delete (with branch) must now recover instead of dead-ending.
+        remove_worktree(
+            repo_path.clone(),
+            worktree_path.to_string_lossy().to_string(),
+            true,
+            true,
+            Some("orphaned-wt".to_string()),
+        )
+        .await
+        .expect("Force delete should recover from missing metadata");
+
+        assert!(
+            !worktree_path.exists(),
+            "leftover directory should be removed"
+        );
+
+        // The branch should be deleted too.
+        let output = Command::new("git")
+            .args(["branch", "--list", "orphaned-wt"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to list branches");
+        let branches = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            branches.trim().is_empty(),
+            "branch should be deleted, got: {:?}",
+            branches
+        );
+    }
+
     #[test]
     fn test_get_worktree_status_clean() {
         let (_temp_dir, repo_path) = setup_test_repo();
@@ -910,6 +1317,261 @@ mod tests {
         assert!(status.has_changes);
         assert_eq!(status.untracked, 1);
         assert_eq!(status.unstaged, 1);
+    }
+
+    #[test]
+    fn test_delete_risk_untracked_files_are_not_a_risk() {
+        let (_temp_dir, repo_path) = setup_test_repo();
+
+        // Untracked files (think node_modules/build output) must NOT be flagged.
+        fs::write(Path::new(&repo_path).join("untracked.txt"), "junk").expect("Failed to write");
+
+        let risk = get_worktree_delete_risk(repo_path, None, false, None).expect("Failed to get risk");
+        assert!(!risk.has_uncommitted_changes);
+        assert_eq!(risk.unpushed_commits, 0);
+        assert!(!risk.branch_content_merged);
+    }
+
+    #[test]
+    fn test_delete_risk_flags_uncommitted_tracked_changes() {
+        let (_temp_dir, repo_path) = setup_test_repo();
+
+        // Modifying a tracked file IS a risk.
+        fs::write(Path::new(&repo_path).join("README.md"), "# Modified").expect("Failed to modify");
+
+        let risk = get_worktree_delete_risk(repo_path, None, false, None).expect("Failed to get risk");
+        assert!(risk.has_uncommitted_changes);
+    }
+
+    #[test]
+    fn test_delete_risk_flags_local_only_commits() {
+        let (_temp_dir, repo_path) = setup_test_repo();
+
+        // A local commit with no remotes at all is unreachable from any remote
+        // ref, so it counts as at-risk.
+        Command::new("git")
+            .args(["checkout", "-b", "feature-x"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to create branch");
+        fs::write(Path::new(&repo_path).join("new.txt"), "work").expect("Failed to write");
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to add");
+        Command::new("git")
+            .args(["commit", "-m", "local work"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("Failed to commit");
+
+        // check_branch=false → not inspected, so no risk reported.
+        let ignored = get_worktree_delete_risk(repo_path.clone(), Some("feature-x".to_string()), false, None)
+            .expect("Failed to get risk");
+        assert_eq!(ignored.unpushed_commits, 0);
+
+        // check_branch=true → the local-only commit is flagged.
+        let risk = get_worktree_delete_risk(repo_path, Some("feature-x".to_string()), true, None)
+            .expect("Failed to get risk");
+        assert!(risk.unpushed_commits >= 1);
+    }
+
+    // ---- Content-based merge detection (squash / rebase merges) ----
+
+    /// True when a usable `git` binary is on PATH. These tests shell out, so
+    /// they skip rather than fail on machines without git.
+    fn git_available() -> bool {
+        Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Run git in `repo` with deterministic identity/config so the result never
+    /// depends on the developer's global git config.
+    fn git_in(repo: &str, args: &[&str]) -> std::process::Output {
+        Command::new("git")
+            .args(["-c", "user.email=test@test.com", "-c", "user.name=Test User"])
+            .args(args)
+            .current_dir(repo)
+            .env("GIT_AUTHOR_NAME", "Test User")
+            .env("GIT_AUTHOR_EMAIL", "test@test.com")
+            .env("GIT_COMMITTER_NAME", "Test User")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .expect("Failed to run git")
+    }
+
+    /// Name of the repo's initial branch (init.defaultBranch varies by machine).
+    fn current_branch(repo: &str) -> String {
+        let out = git_in(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn test_branch_content_is_merged_detects_squash_merge() {
+        if !git_available() {
+            return;
+        }
+        let (_temp_dir, repo_path) = setup_test_repo();
+        let base = current_branch(&repo_path);
+
+        // Branch off and do real work across two commits.
+        git_in(&repo_path, &["checkout", "-b", "feat"]);
+        fs::write(Path::new(&repo_path).join("a.txt"), "one").expect("write");
+        git_in(&repo_path, &["add", "-A"]);
+        git_in(&repo_path, &["commit", "-m", "add a"]);
+        fs::write(Path::new(&repo_path).join("b.txt"), "two").expect("write");
+        git_in(&repo_path, &["add", "-A"]);
+        git_in(&repo_path, &["commit", "-m", "add b"]);
+
+        // Squash-merge it into base: same content, brand-new SHA.
+        git_in(&repo_path, &["checkout", &base]);
+        git_in(&repo_path, &["merge", "--squash", "feat"]);
+        git_in(&repo_path, &["commit", "-m", "squashed feat"]);
+
+        assert!(
+            branch_content_is_merged(&repo_path, "feat", &base),
+            "squash-merged branch should be recognized as content-merged"
+        );
+    }
+
+    #[test]
+    fn test_branch_content_is_merged_false_for_unmerged_branch() {
+        if !git_available() {
+            return;
+        }
+        let (_temp_dir, repo_path) = setup_test_repo();
+        let base = current_branch(&repo_path);
+
+        git_in(&repo_path, &["checkout", "-b", "feat"]);
+        fs::write(Path::new(&repo_path).join("a.txt"), "only on feat").expect("write");
+        git_in(&repo_path, &["add", "-A"]);
+        git_in(&repo_path, &["commit", "-m", "add a"]);
+        git_in(&repo_path, &["checkout", &base]);
+
+        assert!(
+            !branch_content_is_merged(&repo_path, "feat", &base),
+            "genuinely unmerged work must keep warning"
+        );
+    }
+
+    /// The case that a file-by-file comparison gets wrong: after the squash
+    /// merge, the base keeps moving and edits the very same file. The branch
+    /// still contributes nothing, so it must not warn — on an active repo this
+    /// is the common case, not an edge case.
+    #[test]
+    fn test_branch_content_is_merged_when_base_advances_after_squash() {
+        if !git_available() {
+            return;
+        }
+        let (_temp_dir, repo_path) = setup_test_repo();
+        let base = current_branch(&repo_path);
+
+        // The file already exists before the branch diverges, so the later
+        // edits are ordinary modifications rather than an add/add collision.
+        let file = Path::new(&repo_path).join("shared.txt");
+        fs::write(&file, "top\nmiddle\nbottom\n").expect("write");
+        git_in(&repo_path, &["add", "-A"]);
+        git_in(&repo_path, &["commit", "-m", "seed shared"]);
+
+        git_in(&repo_path, &["checkout", "-b", "feat"]);
+        fs::write(&file, "TOP FROM BRANCH\nmiddle\nbottom\n").expect("write");
+        git_in(&repo_path, &["add", "-A"]);
+        git_in(&repo_path, &["commit", "-m", "branch edits the top"]);
+
+        git_in(&repo_path, &["checkout", &base]);
+        git_in(&repo_path, &["merge", "--squash", "feat"]);
+        git_in(&repo_path, &["commit", "-m", "squashed feat"]);
+
+        // Base moves on, editing a different region of the same file.
+        fs::write(&file, "TOP FROM BRANCH\nmiddle\nBOTTOM FROM BASE\n").expect("write");
+        git_in(&repo_path, &["add", "-A"]);
+        git_in(&repo_path, &["commit", "-m", "base edits the bottom"]);
+
+        assert!(
+            branch_content_is_merged(&repo_path, "feat", &base),
+            "a squash-merged branch stays merged after the base moves on"
+        );
+    }
+
+    #[test]
+    fn test_branch_content_is_merged_false_when_partially_merged() {
+        if !git_available() {
+            return;
+        }
+        let (_temp_dir, repo_path) = setup_test_repo();
+        let base = current_branch(&repo_path);
+
+        git_in(&repo_path, &["checkout", "-b", "feat"]);
+        fs::write(Path::new(&repo_path).join("a.txt"), "merged").expect("write");
+        fs::write(Path::new(&repo_path).join("b.txt"), "not merged").expect("write");
+        git_in(&repo_path, &["add", "-A"]);
+        git_in(&repo_path, &["commit", "-m", "add a and b"]);
+
+        // Base picks up only a.txt — b.txt would still be lost.
+        git_in(&repo_path, &["checkout", &base]);
+        fs::write(Path::new(&repo_path).join("a.txt"), "merged").expect("write");
+        git_in(&repo_path, &["add", "-A"]);
+        git_in(&repo_path, &["commit", "-m", "cherry a"]);
+
+        assert!(
+            !branch_content_is_merged(&repo_path, "feat", &base),
+            "partially merged work must keep warning"
+        );
+    }
+
+    #[test]
+    fn test_resolve_base_ref_falls_through_to_supplied_base() {
+        if !git_available() {
+            return;
+        }
+        let (_temp_dir, repo_path) = setup_test_repo();
+        let base = current_branch(&repo_path);
+
+        git_in(&repo_path, &["checkout", "-b", "feat"]);
+
+        // No upstream and no remotes, so the supplied base branch is the only
+        // candidate that can resolve.
+        let resolved = resolve_base_ref(&repo_path, "feat", Some(&base));
+        assert_eq!(resolved.as_deref(), Some(base.as_str()));
+
+        // Nothing resolvable at all → None (caller stays conservative).
+        assert_eq!(resolve_base_ref(&repo_path, "feat", Some("nope-not-a-branch")), None);
+    }
+
+    #[test]
+    fn test_delete_risk_reports_content_merged_after_squash() {
+        if !git_available() {
+            return;
+        }
+        let (_temp_dir, repo_path) = setup_test_repo();
+        let base = current_branch(&repo_path);
+
+        git_in(&repo_path, &["checkout", "-b", "feat"]);
+        fs::write(Path::new(&repo_path).join("a.txt"), "work").expect("write");
+        git_in(&repo_path, &["add", "-A"]);
+        git_in(&repo_path, &["commit", "-m", "work"]);
+        git_in(&repo_path, &["checkout", &base]);
+        git_in(&repo_path, &["merge", "--squash", "feat"]);
+        git_in(&repo_path, &["commit", "-m", "squashed"]);
+        git_in(&repo_path, &["checkout", "feat"]);
+
+        let risk = get_worktree_delete_risk(
+            repo_path,
+            Some("feat".to_string()),
+            true,
+            Some(base.clone()),
+        )
+        .expect("Failed to get risk");
+
+        // The SHA-based count still sees the commit as unpushed…
+        assert!(risk.unpushed_commits >= 1);
+        // …but the content check proves it already landed on the base.
+        assert!(risk.branch_content_merged);
     }
 
     #[test]
@@ -1047,6 +1709,98 @@ prunable gitdir file points to non-existent location
     #[test]
     fn test_parse_worktree_list_empty() {
         assert!(parse_worktree_list("").is_empty());
+    }
+
+    #[test]
+    fn test_parse_worktree_list_leaves_created_at_unset() {
+        // The parser is pure — no filesystem access, so no creation time.
+        let porcelain = "\
+worktree /home/user/repo
+HEAD abc1234567890abcdef
+branch refs/heads/main
+";
+        let worktrees = parse_worktree_list(porcelain);
+        assert_eq!(worktrees.len(), 1);
+        assert!(worktrees[0].created_at_ms.is_none());
+    }
+
+    #[test]
+    fn test_parse_gitdir_file() {
+        assert_eq!(
+            parse_gitdir_file("gitdir: /home/user/repo/.git/worktrees/feat\n"),
+            Some("/home/user/repo/.git/worktrees/feat")
+        );
+        // No trailing newline.
+        assert_eq!(
+            parse_gitdir_file("gitdir: /a/b/.git/worktrees/x"),
+            Some("/a/b/.git/worktrees/x")
+        );
+        // Extra surrounding whitespace / CRLF.
+        assert_eq!(
+            parse_gitdir_file("  gitdir:   /a/b/.git/worktrees/x  \r\n"),
+            Some("/a/b/.git/worktrees/x")
+        );
+        // Not a gitdir file (e.g. a real .git directory read as text).
+        assert_eq!(parse_gitdir_file("ref: refs/heads/main\n"), None);
+        assert_eq!(parse_gitdir_file(""), None);
+        // Present but empty path.
+        assert_eq!(parse_gitdir_file("gitdir:   \n"), None);
+    }
+
+    #[tokio::test]
+    async fn test_worktree_created_at_is_populated() {
+        let (temp_dir, repo_path) = setup_test_repo();
+        let wt_path = temp_dir.path().join("wt-age");
+        let wt_path_str = wt_path.to_string_lossy().to_string();
+
+        create_worktree(
+            repo_path.clone(),
+            wt_path_str.clone(),
+            "age-branch".to_string(),
+            "HEAD".to_string(),
+        )
+        .await
+        .expect("Failed to create worktree");
+
+        let worktrees = get_worktrees(repo_path).expect("Failed to get worktrees");
+        assert_eq!(worktrees.len(), 2);
+
+        // macOS/APFS reports birthtime; other platforms may not. Only assert
+        // sanity when a value is available so the test stays portable.
+        for wt in &worktrees {
+            if let Some(ms) = wt.created_at_ms {
+                assert!(ms > 0, "creation time should be a positive epoch value");
+                let now_ms = system_time_to_ms(SystemTime::now()).unwrap();
+                assert!(ms <= now_ms + 5_000, "creation time should not be in the future");
+            }
+        }
+    }
+
+    #[test]
+    fn test_scan_admin_dirs_for_missing_worktree_folder() {
+        // Simulate a prunable worktree: the admin dir still exists and its
+        // `gitdir` file points at a `.git` file that has been deleted.
+        let temp = TempDir::new().expect("temp dir");
+        let repo = temp.path().join("repo");
+        let admin = repo.join(".git").join("worktrees").join("gone");
+        fs::create_dir_all(&admin).expect("create admin dir");
+
+        let missing_wt_dot_git = temp.path().join("worktrees").join("gone").join(".git");
+        fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", missing_wt_dot_git.display()),
+        )
+        .expect("write gitdir");
+
+        let found = scan_admin_dirs_for(&repo.to_string_lossy(), &missing_wt_dot_git);
+        // Only assert the match logic when the platform reports birthtimes.
+        if created_at_ms_of(&admin).is_some() {
+            assert!(found.is_some(), "should resolve the admin dir by gitdir match");
+        }
+
+        // A non-matching target must not resolve.
+        let other = temp.path().join("worktrees").join("other").join(".git");
+        assert!(scan_admin_dirs_for(&repo.to_string_lossy(), &other).is_none());
     }
 
     #[test]

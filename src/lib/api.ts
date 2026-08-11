@@ -9,6 +9,8 @@ export interface BackendWorktree {
   is_bare: boolean;
   is_detached: boolean;
   prunable: boolean;
+  /** Best-effort worktree creation time (epoch ms); null when undeterminable. */
+  created_at_ms?: number | null;
 }
 
 export interface RunningServer {
@@ -18,6 +20,11 @@ export interface RunningServer {
   process_name: string;
   address: string;
   uptime_secs: number;
+}
+
+export interface StoppedProcess {
+  pid: number;
+  process_name: string;
 }
 
 export interface BackendBranch {
@@ -57,6 +64,8 @@ export interface BackendAppSettings {
   last_used_project?: string;
   refresh_interval_minutes: number;
   skip_open_ide_confirm?: boolean;
+  /** Worktree list ordering; validated with parseWorktreeSortMode. */
+  worktree_sort?: string | null;
   onboarding_completed?: boolean;
   projects: BackendProjectConfig[];
   github_configs: unknown[];
@@ -114,6 +123,10 @@ export async function setRefreshIntervalMinutes(minutes: number): Promise<void> 
 
 export async function setSkipOpenIdeConfirm(skip: boolean): Promise<void> {
   return invoke('set_skip_open_ide_confirm', { skip });
+}
+
+export async function setWorktreeSort(sort: string): Promise<void> {
+  return invoke('set_worktree_sort', { sort });
 }
 
 export async function setOnboardingCompleted(completed: boolean): Promise<void> {
@@ -187,8 +200,38 @@ export async function getWorktreeStatus(worktreePath: string): Promise<BackendWo
   return invoke('get_worktree_status', { worktreePath });
 }
 
+export interface WorktreeDeleteRisk {
+  has_uncommitted_changes: boolean;
+  unpushed_commits: number;
+  /**
+   * True when every file the branch changed is already byte-identical in the
+   * base branch — i.e. the work was squash- or rebase-merged, so the commits
+   * only *look* unpushed (their SHAs were rewritten by the merge).
+   */
+  branch_content_merged: boolean;
+}
+
+/// Report what deleting a worktree (and optionally its branch) would
+/// irreversibly discard. Untracked files are not treated as risk.
+/// `baseBranch` (the project's default base) lets the backend verify by
+/// content whether "unpushed" commits were already squash-merged.
+export async function getWorktreeDeleteRisk(
+  worktreePath: string,
+  branch: string | undefined,
+  checkBranch: boolean,
+  baseBranch?: string
+): Promise<WorktreeDeleteRisk> {
+  return invoke('get_worktree_delete_risk', { worktreePath, branch, checkBranch, baseBranch });
+}
+
 export async function getRunningServers(worktreePaths: string[]): Promise<RunningServer[]> {
   return invoke('get_running_servers', { worktreePaths });
+}
+
+/// Terminate processes whose working directory is inside the worktree (dev
+/// servers, watchers, etc.). Returns what was stopped. macOS/Unix only.
+export async function stopWorktreeProcesses(worktreePath: string): Promise<StoppedProcess[]> {
+  return invoke('stop_worktree_processes', { worktreePath });
 }
 
 // ============ Git - Branch API ============

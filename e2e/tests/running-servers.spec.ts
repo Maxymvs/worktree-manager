@@ -45,13 +45,14 @@ test.describe('Running Servers @worktree', () => {
     await expect(ideModal).not.toBeVisible()
   })
 
-  test('detached worktree shows the detached label, not a blank cell', async ({ mockedPage }) => {
+  test('detached worktree shows the commit SHA, not a blank cell', async ({ mockedPage }) => {
     await mockedPage.locator('.worktree-row').first().waitFor({ timeout: 10000 })
 
-    // The detached row should render the "(detached @ abc1234)" label.
+    // The detached row shows the bare short SHA plus a "no branch" badge.
     const detachedLabel = mockedPage.locator('.worktree-branch-detached')
     await expect(detachedLabel).toBeVisible()
-    await expect(detachedLabel).toContainText('(detached @ abc1234)')
+    await expect(detachedLabel).toHaveText('abc1234')
+    await expect(mockedPage.getByTestId('detached-badge')).toHaveText('no branch')
   })
 
   test('hovering the primary pill reveals a dropdown listing all servers', async ({ mockedPage }) => {

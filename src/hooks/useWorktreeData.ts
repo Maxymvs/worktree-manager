@@ -136,6 +136,7 @@ export function useWorktreeData({
                   isMain: w.is_main,
                   isDetached: w.is_detached,
                   prunable: w.prunable,
+                  createdAtMs: w.created_at_ms ?? undefined,
                 };
 
                 // Load memo (local data)

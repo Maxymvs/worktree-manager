@@ -185,6 +185,17 @@ pub fn set_onboarding_completed(
 }
 
 #[tauri::command]
+pub fn set_worktree_sort(
+    app: tauri::AppHandle,
+    state: State<SettingsState>,
+    sort: String,
+) -> Result<(), String> {
+    let mut settings = state.0.lock().map_err(|e| e.to_string())?;
+    settings.worktree_sort = Some(sort);
+    save_settings(&app, &settings)
+}
+
+#[tauri::command]
 pub fn get_worktree_memo(
     state: State<SettingsState>,
     path: String,

@@ -14,11 +14,43 @@ import {
   ChevronDown,
   MessageSquare,
   MessageSquarePlus,
+  Loader2,
 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import type { PullRequestInfo, RunningServer } from '@/lib/api';
 import type { WorktreeWithIntegrations } from './types';
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+const MONTH_MS = 30 * DAY_MS;
+const YEAR_MS = 365 * DAY_MS;
+
+/** Long-form relative age for the server hover card, e.g. "12 days ago". */
+function formatAgeLong(ms: number): string {
+  const elapsed = Math.max(0, Date.now() - ms);
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'} ago`;
+  if (elapsed < MINUTE_MS) return 'just now';
+  if (elapsed < HOUR_MS) return plural(Math.floor(elapsed / MINUTE_MS), 'minute');
+  if (elapsed < DAY_MS) return plural(Math.floor(elapsed / HOUR_MS), 'hour');
+  if (elapsed < MONTH_MS) return plural(Math.floor(elapsed / DAY_MS), 'day');
+  if (elapsed < YEAR_MS) return plural(Math.floor(elapsed / MONTH_MS), 'month');
+  return plural(Math.floor(elapsed / YEAR_MS), 'year');
+}
+
+/** Absolute creation timestamp for the server hover card, e.g. "Jul 19, 2026 at 2:41 PM". */
+function formatCreatedAt(ms: number): string {
+  const date = new Date(ms);
+  const day = date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return `${day} at ${time}`;
+}
 
 /** Compact human-readable uptime, e.g. "45s", "12m", "3h 5m", "2d 4h". */
 function formatUptime(secs: number): string {
@@ -82,6 +114,8 @@ interface WorktreeRowProps {
   servers: RunningServer[];
   jiraHost: string | null;
   isSelected: boolean;
+  /** Deletion is running in the background for this worktree. */
+  isDeleting: boolean;
 }
 
 export function WorktreeRow({
@@ -99,6 +133,7 @@ export function WorktreeRow({
   servers,
   jiraHost,
   isSelected,
+  isDeleting,
 }: WorktreeRowProps) {
   const [showActions, setShowActions] = useState(false);
   const [dropdownPos, setDropdownPos] = useState<{
@@ -128,7 +163,8 @@ export function WorktreeRow({
   }, [showActions]);
 
   const handleRowClick = () => {
-    if (!showActions) {
+    // A row being deleted is inert — its directory is going away.
+    if (!showActions && !isDeleting) {
       onOpenIde(worktree.path);
     }
   };
@@ -204,8 +240,11 @@ export function WorktreeRow({
 
   return (
     <div
-      className={`worktree-row ${isSelected ? 'worktree-row-selected' : ''}`}
+      className={`worktree-row ${isSelected ? 'worktree-row-selected' : ''}${
+        isDeleting ? ' worktree-row-deleting' : ''
+      }`}
       data-worktree-path={worktree.path}
+      aria-busy={isDeleting || undefined}
       onClick={handleRowClick}
       onMouseLeave={() => setShowActions(false)}
     >
@@ -213,26 +252,51 @@ export function WorktreeRow({
       <div className="worktree-col-branch">
         <GitBranch size={14} className="worktree-branch-icon" />
         {worktree.isDetached ? (
-          <span className="worktree-branch-detached" title="Detached HEAD">
-            (detached @ {worktree.branch})
-          </span>
+          <>
+            <span className="worktree-branch-detached">{worktree.branch}</span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="worktree-detached-badge" data-testid="detached-badge">
+                  no branch
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                Detached HEAD — this worktree is checked out at commit {worktree.branch} instead
+                of a branch. Usually leftover from a checkout or rebase; new commits here won't
+                belong to any branch.
+              </TooltipContent>
+            </Tooltip>
+          </>
         ) : (
           <span className="worktree-branch-name">{worktree.branch}</span>
         )}
         {worktree.isMain && <span className="worktree-main-badge">main</span>}
         {worktree.prunable && (
-          <span className="worktree-prunable-badge" title="This worktree can be pruned">
-            prunable
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="worktree-prunable-badge" data-testid="stale-badge">
+                stale
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              Git can no longer find this worktree's folder — it was likely deleted or moved
+              outside the app. The entry is safe to remove: use Delete to clean it up. (Git calls
+              this "prunable".)
+            </TooltipContent>
+          </Tooltip>
         )}
-        <button
-          ref={buttonRef}
-          className="worktree-more"
-          title="More actions"
-          onClick={handleMoreClick}
-        >
-          <MoreHorizontal size={14} />
-        </button>
+        {/* No actions while the worktree is being removed — every one of them
+            operates on a directory that is disappearing. */}
+        {!isDeleting && (
+          <button
+            ref={buttonRef}
+            className="worktree-more"
+            title="More actions"
+            onClick={handleMoreClick}
+          >
+            <MoreHorizontal size={14} />
+          </button>
+        )}
         {showActions && createPortal(
           <div
             ref={dropdownRef}
@@ -322,7 +386,15 @@ export function WorktreeRow({
       {/* Running dev servers - single primary pill + hover dropdown */}
       {showServers && (
         <div className="worktree-col-servers">
-          {primary && (
+          {/* While deleting, this slot reports progress instead of ports — the
+              servers are being killed as part of the removal anyway. */}
+          {isDeleting ? (
+            <span className="worktree-deleting-badge" data-testid="deleting-badge">
+              <Loader2 size={10} className="worktree-deleting-spinner" aria-hidden="true" />
+              Deleting…
+            </span>
+          ) : (
+            primary && (
             <HoverCard openDelay={150} closeDelay={100}>
               <HoverCardTrigger asChild>
                 <button
@@ -367,9 +439,21 @@ export function WorktreeRow({
                     );
                   })}
                 </div>
-                <div className="server-hover-footer">Click to open in browser</div>
+                <div className="server-hover-footer">
+                  {/* The main worktree is the clone itself — it was never
+                      created by `git worktree add`, so its birthtime is the
+                      clone date and gets labelled as such. */}
+                  {worktree.createdAtMs !== undefined && (
+                    <div className="server-hover-created" data-testid="worktree-age">
+                      {worktree.isMain ? 'Repo cloned' : 'Worktree created'}{' '}
+                      {formatAgeLong(worktree.createdAtMs)} · {formatCreatedAt(worktree.createdAtMs)}
+                    </div>
+                  )}
+                  <div>Click to open in browser</div>
+                </div>
               </HoverCardContent>
             </HoverCard>
+            )
           )}
         </div>
       )}

@@ -110,6 +110,10 @@ pub struct AppSettings {
     pub skip_open_ide_confirm: Option<bool>,
     #[serde(default)]
     pub onboarding_completed: Option<bool>,
+    /// Worktree list ordering, e.g. "name" | "name-desc" | "newest" |
+    /// "oldest" | "uptime". Validated on the frontend.
+    #[serde(default)]
+    pub worktree_sort: Option<String>,
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
     #[serde(default)]

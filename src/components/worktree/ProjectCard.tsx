@@ -8,10 +8,11 @@ import {
   GitBranchPlus,
   GripVertical,
 } from 'lucide-react';
-import type { Project, Worktree } from '@/types';
+import type { Project, Worktree, WorktreeSortMode } from '@/types';
 import type { RunningServer } from '@/lib/api';
+import { sortWorktrees } from '@/lib/worktree-sort';
 import { WorktreeRow } from './WorktreeRow';
-import type { ProjectWithIntegrations } from './types';
+import type { ProjectWithIntegrations, WorktreeWithIntegrations } from './types';
 
 interface ProjectCardProps {
   project: ProjectWithIntegrations;
@@ -25,14 +26,23 @@ interface ProjectCardProps {
   onCreateWorktree: () => void;
   onEditWorktree: (worktree: Worktree, repoPath: string) => void;
   onEditComment: (worktree: Worktree, repoPath: string) => void;
-  onDeleteWorktree: (worktree: Worktree, repoPath: string) => void;
+  // The base branch is passed through so the delete flow can verify, by
+  // content, whether the branch's commits already landed there (squash merge).
+  onDeleteWorktree: (
+    worktree: WorktreeWithIntegrations,
+    repoPath: string,
+    baseBranch?: string
+  ) => void;
   showDescription: boolean;
   showGitHub: boolean;
   showJira: boolean;
   showServers: boolean;
   serversByPath: Record<string, RunningServer[]>;
+  /** Paths whose deletion is running in the background. */
+  deletingPaths: Set<string>;
   selectedPath: string | null;
   searchQuery: string;
+  sortMode: WorktreeSortMode;
 }
 
 export function SortableProjectCard(props: ProjectCardProps) {
@@ -79,19 +89,17 @@ export function ProjectCard({
   showJira,
   showServers,
   serversByPath,
+  deletingPaths,
   jiraHost,
   selectedPath,
   searchQuery,
+  sortMode,
   dragHandleProps,
 }: ProjectCardInternalProps) {
-  // Filter worktrees by search query
+  // Order by the global sort preference, then filter by search query
   const filteredWorktrees = useMemo(() => {
     const query = searchQuery.toLowerCase();
-    const sorted = [...project.worktrees].sort((a, b) => {
-      if (a.isMain && !b.isMain) return -1;
-      if (!a.isMain && b.isMain) return 1;
-      return a.branch.localeCompare(b.branch);
-    });
+    const sorted = sortWorktrees(project.worktrees, sortMode, serversByPath);
 
     if (!query) return sorted;
 
@@ -101,7 +109,7 @@ export function ProjectCard({
       const commentMatch = w.comment?.toLowerCase().includes(query);
       return branchMatch || descMatch || commentMatch;
     });
-  }, [project.worktrees, searchQuery]);
+  }, [project.worktrees, searchQuery, sortMode, serversByPath]);
   return (
     <div className="project-section">
       {/* Project Header */}
@@ -176,7 +184,9 @@ export function ProjectCard({
                 onOpenTerminal={onOpenTerminal}
                 onEdit={() => onEditWorktree(worktree, project.repoPath)}
                 onEditComment={() => onEditComment(worktree, project.repoPath)}
-                onDelete={() => onDeleteWorktree(worktree, project.repoPath)}
+                onDelete={() =>
+                  onDeleteWorktree(worktree, project.repoPath, project.defaultBaseBranch)
+                }
                 showDescription={showDescription}
                 showGitHub={showGitHub}
                 showJira={showJira}
@@ -184,6 +194,7 @@ export function ProjectCard({
                 servers={serversByPath[worktree.path] ?? []}
                 jiraHost={jiraHost}
                 isSelected={selectedPath === worktree.path}
+                isDeleting={deletingPaths.has(worktree.path)}
               />
             ))
           )}
