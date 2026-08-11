@@ -370,6 +370,15 @@ fn wait_for_exit(pids: &[u32], attempts: u32, interval_ms: u64) -> Vec<u32> {
     alive
 }
 
+/// True when `path` is a directory that holds a `.git` entry, i.e. the root of
+/// a working tree. Both shapes count: a linked worktree has a `.git` *file*
+/// pointing at `.git/worktrees/<id>`, the main worktree has a `.git`
+/// *directory*. `exists()` covers either (and follows the link for a symlinked
+/// `.git`).
+fn looks_like_git_worktree(path: &Path) -> bool {
+    path.is_dir() && path.join(".git").exists()
+}
+
 /// Terminate every process whose working directory is inside `worktree_path`.
 ///
 /// This exists so the UI can free a worktree before deleting it: a running dev
@@ -392,6 +401,16 @@ pub async fn stop_worktree_processes(
         // whole session's processes.
         if worktree_canon.as_os_str().is_empty() || worktree_canon.parent().is_none() {
             return Err(format!("refusing to stop processes for '{}'", worktree_path));
+        }
+
+        // Safety: the path must actually look like a worktree. Without this, a
+        // caller passing something broad (say `$HOME`) would kill every process
+        // running anywhere beneath it.
+        if !looks_like_git_worktree(&worktree_canon) {
+            return Err(format!(
+                "refusing to stop processes for '{}': it does not look like a git worktree",
+                worktree_path
+            ));
         }
 
         // List every process's cwd. Like the other lsof passes, non-zero exits
@@ -738,5 +757,46 @@ mod tests {
 
         let servers = match_servers_to_worktrees(&listeners, &cwds, &ps_info, &worktrees);
         assert!(servers.is_empty());
+    }
+
+    // ---- Guard for stop_worktree_processes ----
+
+    #[test]
+    fn test_looks_like_git_worktree_accepts_dot_git_dir_and_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        // Main worktree: `.git` is a directory.
+        let main = temp.path().join("main");
+        std::fs::create_dir_all(main.join(".git")).expect("create .git dir");
+        assert!(looks_like_git_worktree(&main));
+
+        // Linked worktree: `.git` is a file pointing at the admin dir.
+        let linked = temp.path().join("feature-a");
+        std::fs::create_dir_all(&linked).expect("create worktree dir");
+        std::fs::write(linked.join(".git"), "gitdir: /repo/.git/worktrees/feature-a\n")
+            .expect("write .git file");
+        assert!(looks_like_git_worktree(&linked));
+    }
+
+    #[test]
+    fn test_looks_like_git_worktree_rejects_plain_dirs_and_missing_paths() {
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        // A directory with no `.git` at all — e.g. a stray `$HOME`.
+        let plain = temp.path().join("home");
+        std::fs::create_dir_all(plain.join("Documents")).expect("create dirs");
+        assert!(!looks_like_git_worktree(&plain));
+
+        // Nonexistent path.
+        assert!(!looks_like_git_worktree(&temp.path().join("gone")));
+
+        // A file, not a directory, even though it exists.
+        let file = temp.path().join("not-a-dir");
+        std::fs::write(&file, "x").expect("write file");
+        assert!(!looks_like_git_worktree(&file));
+
+        // Filesystem root is not a worktree either (belt-and-braces: the
+        // parent()-is-none guard also rejects it).
+        assert!(!looks_like_git_worktree(Path::new("/")));
     }
 }

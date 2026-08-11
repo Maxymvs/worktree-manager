@@ -1,6 +1,6 @@
 use git2::{BranchType, Repository};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -366,6 +366,72 @@ pub async fn remove_worktree(
     .map_err(|e| format!("Task failed: {}", e))?
 }
 
+/// Decide whether `worktree_path` is safe to delete outright, and return the
+/// canonical directory to hand to `remove_dir_all`.
+///
+/// `Ok(None)` means the directory is already gone, so there is nothing to
+/// remove (the caller still prunes). Every comparison runs on *canonical*
+/// paths, so a path stuffed with `..` segments or routed through a symlink
+/// can't dodge the checks. Rejected outright:
+///
+/// - an empty path,
+/// - a path with no parent, i.e. a filesystem root,
+/// - a path that resolves to the repository itself,
+/// - a path that *contains* the repository — deleting it would take the
+///   repository with it.
+fn resolve_force_delete_target(
+    repo_path: &str,
+    worktree_path: &str,
+) -> Result<Option<PathBuf>, String> {
+    if worktree_path.trim().is_empty() {
+        return Err("refusing to force-delete an empty path".to_string());
+    }
+
+    let worktree_canon = match std::fs::canonicalize(worktree_path) {
+        Ok(path) => path,
+        // Already gone — the removal goal is achieved; let the caller prune.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(format!(
+                "refusing to force-delete '{}': cannot resolve it: {}",
+                worktree_path, e
+            ))
+        }
+    };
+
+    if worktree_canon.parent().is_none() {
+        return Err(format!(
+            "refusing to force-delete '{}': it is a filesystem root",
+            worktree_path
+        ));
+    }
+
+    let repo_canon = std::fs::canonicalize(repo_path).map_err(|e| {
+        format!(
+            "refusing to force-delete '{}': cannot resolve repository '{}': {}",
+            worktree_path, repo_path, e
+        )
+    })?;
+
+    if repo_canon == worktree_canon {
+        return Err(format!(
+            "refusing to force-delete '{}': it is the repository itself",
+            worktree_path
+        ));
+    }
+
+    // Component-wise, so a sibling directory sharing a name prefix
+    // (`/a/repo-old` vs `/a/repo`) isn't mistaken for a parent.
+    if repo_canon.starts_with(&worktree_canon) {
+        return Err(format!(
+            "refusing to force-delete '{}': the repository '{}' is inside it",
+            worktree_path, repo_path
+        ));
+    }
+
+    Ok(Some(worktree_canon))
+}
+
 /// Finish removing a worktree that `git worktree remove --force` could not.
 ///
 /// `git worktree remove` deletes the administrative entry under
@@ -377,29 +443,31 @@ pub async fn remove_worktree(
 /// still run and `git worktree list` stays consistent.
 fn force_cleanup_worktree(repo_path: &str, worktree_path: &str) -> Result<(), String> {
     // Guard against nuking something that isn't a linked worktree directory.
-    if worktree_path.trim().is_empty() || worktree_path == repo_path {
-        return Err(format!("refusing to force-delete '{}'", worktree_path));
-    }
+    // `None` means the directory is already gone — nothing to remove, but the
+    // prune below still runs so stale bookkeeping doesn't linger.
+    let target = resolve_force_delete_target(repo_path, worktree_path)?;
 
     // Remove the leftover directory. Retry a few times: the usual cause of the
     // original failure is another process recreating files mid-delete, which is
     // often transient.
     let mut last_err = None;
-    for attempt in 0..3 {
-        match std::fs::remove_dir_all(worktree_path) {
-            // Success, or already gone (git got it, or a prior attempt did).
-            Ok(()) => {
-                last_err = None;
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                last_err = None;
-                break;
-            }
-            Err(e) => {
-                last_err = Some(e);
-                if attempt < 2 {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+    if let Some(target) = target.as_ref() {
+        for attempt in 0..3 {
+            match std::fs::remove_dir_all(target) {
+                // Success, or already gone (git got it, or a prior attempt did).
+                Ok(()) => {
+                    last_err = None;
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    last_err = None;
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    if attempt < 2 {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
                 }
             }
         }
@@ -507,7 +575,8 @@ pub struct WorktreeDeleteRisk {
 /// Lenient: any failure returns 0 (don't block a delete on an unknowable state).
 fn count_unpushed_commits(worktree_path: &str, branch: &str) -> i32 {
     let output = Command::new("git")
-        .args(["rev-list", "--count", branch, "--not", "--remotes"])
+        // Trailing `--` so a branch name is never taken for a pathspec.
+        .args(["rev-list", "--count", branch, "--not", "--remotes", "--"])
         .current_dir(worktree_path)
         .output();
     match output {
@@ -604,7 +673,23 @@ fn branch_content_is_merged(worktree_path: &str, branch: &str, base: &str) -> bo
 /// used only to verify, by content, whether "unpushed" commits were actually
 /// squash- or rebase-merged already.
 #[tauri::command]
-pub fn get_worktree_delete_risk(
+pub async fn get_worktree_delete_risk(
+    worktree_path: String,
+    branch: Option<String>,
+    check_branch: bool,
+    base_branch: Option<String>,
+) -> Result<WorktreeDeleteRisk, String> {
+    tokio::task::spawn_blocking(move || {
+        compute_worktree_delete_risk(worktree_path, branch, check_branch, base_branch)
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
+/// Synchronous body of [`get_worktree_delete_risk`]. Shells out to git several
+/// times, so the command wraps it in `spawn_blocking` rather than running it on
+/// the async runtime.
+fn compute_worktree_delete_risk(
     worktree_path: String,
     branch: Option<String>,
     check_branch: bool,
@@ -1290,6 +1375,72 @@ mod tests {
         );
     }
 
+    // ---- Guard on the force-cleanup removal target ----
+
+    #[test]
+    fn test_resolve_force_delete_target_accepts_a_sibling_worktree() {
+        let (temp_dir, repo_path) = setup_test_repo();
+        let worktree_path = temp_dir.path().join("worktrees/feature-a");
+        fs::create_dir_all(&worktree_path).expect("Failed to create worktree dir");
+
+        let target = resolve_force_delete_target(&repo_path, &worktree_path.to_string_lossy())
+            .expect("a sibling directory should be accepted")
+            .expect("directory exists, so a target is expected");
+        assert_eq!(
+            target,
+            std::fs::canonicalize(&worktree_path).expect("canonicalize")
+        );
+    }
+
+    #[test]
+    fn test_resolve_force_delete_target_missing_dir_yields_no_target() {
+        let (temp_dir, repo_path) = setup_test_repo();
+        let gone = temp_dir.path().join("worktrees/already-gone");
+
+        // Already gone: not an error (the removal goal is met), just nothing to
+        // remove — the caller still prunes.
+        let target = resolve_force_delete_target(&repo_path, &gone.to_string_lossy())
+            .expect("a missing directory is not an error");
+        assert!(target.is_none());
+    }
+
+    #[test]
+    fn test_resolve_force_delete_target_rejects_empty_and_root() {
+        let (_temp_dir, repo_path) = setup_test_repo();
+
+        assert!(resolve_force_delete_target(&repo_path, "").is_err());
+        assert!(resolve_force_delete_target(&repo_path, "   ").is_err());
+        assert!(resolve_force_delete_target(&repo_path, "/").is_err());
+    }
+
+    #[test]
+    fn test_resolve_force_delete_target_rejects_the_repo_itself() {
+        let (_temp_dir, repo_path) = setup_test_repo();
+
+        let err = resolve_force_delete_target(&repo_path, &repo_path)
+            .expect_err("deleting the repo itself must be refused");
+        assert!(err.contains("repository itself"), "got: {}", err);
+
+        // Same path dressed up with `.` / `..` segments must be refused too —
+        // the checks run on canonical paths.
+        let sneaky = format!("{}/../repo", repo_path);
+        let err = resolve_force_delete_target(&repo_path, &sneaky)
+            .expect_err("a '..' detour must not bypass the guard");
+        assert!(err.contains("repository itself"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_resolve_force_delete_target_rejects_an_ancestor_of_the_repo() {
+        let (temp_dir, repo_path) = setup_test_repo();
+
+        // The repo lives inside temp_dir — deleting temp_dir would take the
+        // repository with it.
+        let parent = temp_dir.path().to_string_lossy().to_string();
+        let err = resolve_force_delete_target(&repo_path, &parent)
+            .expect_err("deleting a parent of the repo must be refused");
+        assert!(err.contains("is inside it"), "got: {}", err);
+    }
+
     #[test]
     fn test_get_worktree_status_clean() {
         let (_temp_dir, repo_path) = setup_test_repo();
@@ -1326,7 +1477,7 @@ mod tests {
         // Untracked files (think node_modules/build output) must NOT be flagged.
         fs::write(Path::new(&repo_path).join("untracked.txt"), "junk").expect("Failed to write");
 
-        let risk = get_worktree_delete_risk(repo_path, None, false, None).expect("Failed to get risk");
+        let risk = compute_worktree_delete_risk(repo_path, None, false, None).expect("Failed to get risk");
         assert!(!risk.has_uncommitted_changes);
         assert_eq!(risk.unpushed_commits, 0);
         assert!(!risk.branch_content_merged);
@@ -1339,7 +1490,7 @@ mod tests {
         // Modifying a tracked file IS a risk.
         fs::write(Path::new(&repo_path).join("README.md"), "# Modified").expect("Failed to modify");
 
-        let risk = get_worktree_delete_risk(repo_path, None, false, None).expect("Failed to get risk");
+        let risk = compute_worktree_delete_risk(repo_path, None, false, None).expect("Failed to get risk");
         assert!(risk.has_uncommitted_changes);
     }
 
@@ -1367,12 +1518,12 @@ mod tests {
             .expect("Failed to commit");
 
         // check_branch=false → not inspected, so no risk reported.
-        let ignored = get_worktree_delete_risk(repo_path.clone(), Some("feature-x".to_string()), false, None)
+        let ignored = compute_worktree_delete_risk(repo_path.clone(), Some("feature-x".to_string()), false, None)
             .expect("Failed to get risk");
         assert_eq!(ignored.unpushed_commits, 0);
 
         // check_branch=true → the local-only commit is flagged.
-        let risk = get_worktree_delete_risk(repo_path, Some("feature-x".to_string()), true, None)
+        let risk = compute_worktree_delete_risk(repo_path, Some("feature-x".to_string()), true, None)
             .expect("Failed to get risk");
         assert!(risk.unpushed_commits >= 1);
     }
@@ -1560,7 +1711,7 @@ mod tests {
         git_in(&repo_path, &["commit", "-m", "squashed"]);
         git_in(&repo_path, &["checkout", "feat"]);
 
-        let risk = get_worktree_delete_risk(
+        let risk = compute_worktree_delete_risk(
             repo_path,
             Some("feat".to_string()),
             true,
