@@ -1,6 +1,6 @@
 [package]
 name = "grovr"
-version = "0.7.3"
+version = "0.8.0"
 description = "Grovr - Git Worktree Manager Desktop App"
 authors = ["Maxymvs"]
 edition = "2024"
