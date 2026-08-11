@@ -12,9 +12,12 @@ Updates version, builds signed app, and creates a single commit.
 ## Prerequisites
 
 - Git status must be clean
-- Environment variables configured:
-  - `APPLE_SIGNING_IDENTITY` - Developer ID certificate
-  - (Optional) `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` - For notarization
+- Signing credentials in the gitignored `.env.signing` (see
+  `.env.signing.example`): `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
+  `APPLE_PASSWORD`, `APPLE_TEAM_ID`. `scripts/release-build.sh` loads that file
+  itself, so nothing needs to be exported into your shell.
+- A Developer ID Application certificate in the keychain
+  (`./scripts/signing-setup.sh --check` to confirm).
 
 ## Usage
 
@@ -31,9 +34,13 @@ Updates version, builds signed app, and creates a single commit.
    - `package.json`
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
-4. Builds signed Tauri app
-5. Verifies code signature
-6. Creates commit: `chore: bump version to X.Y.Z`
+4. Runs `scripts/release-build.sh`, the single build path: universal
+   (`--target universal-apple-darwin`), signed, notarized and stapled for both
+   the `.app` and the `.dmg`, then verified with codesign/spctl/stapler/lipo
+5. Creates commit: `chore: bump version to X.Y.Z`
+
+Artifacts land in `src-tauri/target/universal-apple-darwin/release/bundle/`,
+**not** `src-tauri/target/release/bundle/`.
 
 ## Exit codes
 

@@ -77,61 +77,31 @@ sed -i '' "s/^version = \"$CURRENT_VERSION\"/version = \"$VERSION\"/" src-tauri/
 
 echo -e "${GREEN}✓${NC} Version updated to $VERSION"
 
-# === Step 2: Check build environment ===
+# === Step 2: Build, sign, notarize ===
+# Delegated to scripts/release-build.sh so there is ONE build path. It loads
+# credentials from the gitignored .env.signing, builds universal
+# (--target universal-apple-darwin), notarizes and staples both the .app and
+# the .dmg, and verifies with codesign/spctl/stapler/lipo — so no separate
+# signature check is needed here.
 echo ""
-echo -e "${BLUE}Step 2: Checking build environment...${NC}"
+echo -e "${BLUE}Step 2: Building signed + notarized universal release...${NC}"
+echo ""
 
-MISSING=""
-if [[ -z "$APPLE_SIGNING_IDENTITY" ]]; then
-  MISSING="$MISSING  - APPLE_SIGNING_IDENTITY\n"
-fi
-
-if [[ -n "$MISSING" ]]; then
-  echo -e "${RED}ERROR: Missing required environment variables:${NC}"
-  echo -e "$MISSING"
-  echo "See documentation for setup instructions"
+if [[ ! -x scripts/release-build.sh ]]; then
+  echo -e "${RED}ERROR: scripts/release-build.sh not found or not executable${NC}"
   exit 2
 fi
 
-echo -e "${GREEN}✓${NC} APPLE_SIGNING_IDENTITY set"
-
-# Check optional notarization credentials
-if [[ -z "$APPLE_ID" || -z "$APPLE_PASSWORD" || -z "$APPLE_TEAM_ID" ]]; then
-  echo -e "${YELLOW}⚠${NC} Notarization credentials not set (APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID)"
-  echo "   App will be signed but NOT notarized"
-  echo ""
-  read -p "Continue without notarization? [Y/n] " -n 1 -r
-  echo
-  if [[ $REPLY =~ ^[Nn]$ ]]; then
-    exit 2
-  fi
-else
-  echo -e "${GREEN}✓${NC} Notarization credentials set"
-fi
-
-# === Step 3: Build ===
-echo ""
-echo -e "${BLUE}Step 3: Building Tauri application...${NC}"
-echo ""
-
 pnpm install
-pnpm tauri build
 
-# === Step 4: Verify code signature ===
-echo ""
-echo "Verifying code signature..."
-SIGNATURE_INFO=$(codesign -dv --verbose=2 "$(ls -d src-tauri/target/release/bundle/macos/*.app | head -1)" 2>&1 || true)
-
-if echo "$SIGNATURE_INFO" | grep -q "Authority=Developer ID"; then
-  echo -e "${GREEN}✓${NC} Code signature verified"
-  echo "$SIGNATURE_INFO" | grep -E "(Authority|TeamIdentifier)" | head -3
-else
-  echo -e "${RED}ERROR: Code signature verification failed${NC}"
-  echo "$SIGNATURE_INFO"
+if ! ./scripts/release-build.sh; then
+  echo ""
+  echo -e "${RED}ERROR: release build failed — version files were updated but NOT committed${NC}"
+  echo "Fix the build, then re-run this script or commit the version bump by hand."
   exit 4
 fi
 
-# === Step 5: Commit all changes ===
+# === Step 3: Commit all changes ===
 echo ""
 echo "Creating commit..."
 
@@ -145,6 +115,8 @@ echo ""
 echo "Version: $VERSION"
 echo ""
 echo "Artifacts:"
-ls -lh src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null || echo "  (no DMG found)"
+ls -lh src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg 2>/dev/null \
+  || echo "  (no DMG found)"
 echo ""
-echo "Next step: Run /release to publish to GitHub"
+echo "Next: push the commit, then hand out the .dmg — or tag to trigger CI"
+echo "      (CI needs the six Apple repo secrets; see docs/DISTRIBUTION.md)."
