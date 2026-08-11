@@ -104,7 +104,6 @@ export function WorktreeListPage({
   const [stopProcesses, setStopProcesses] = useState(true);
   // Risk warning: only shown when a delete would discard real work.
   const [riskModalOpen, setRiskModalOpen] = useState(false);
-  const [riskConfirming, setRiskConfirming] = useState(false);
   const [deleteRisk, setDeleteRisk] = useState<WorktreeDeleteRisk | null>(null);
   const [errorModalOpen, setErrorModalOpen] = useState(false);
   const [errorModalMessage, setErrorModalMessage] = useState('');
@@ -464,7 +463,9 @@ export function WorktreeListPage({
   const performDelete = async () => {
     if (!deleteModalData) return;
     const { worktree, repoPath } = deleteModalData;
-    const alsoDeleteBranch = deleteBranchToo;
+    // Detached worktrees have a SHA in `branch`, not a real branch — never ask
+    // git to delete it. Matches the guard used for the risk check above.
+    const alsoDeleteBranch = deleteBranchToo && !worktree.isDetached;
     const shouldStopProcesses =
       stopProcesses && (serversByPath[worktree.path]?.length ?? 0) > 0;
 
@@ -508,10 +509,9 @@ export function WorktreeListPage({
     setDeleteModalData(null);
     setDeleteBranchToo(false);
     setDeleteRisk(null);
-    // The dialogs are the only consumers of these; clear them here so a
-    // dismissed dialog never reopens still showing a spinner.
+    // The dialogs are the only consumer of this; clear it here so a dismissed
+    // dialog never reopens still showing a spinner.
     setDeleting(false);
-    setRiskConfirming(false);
   };
 
   // Check if any worktree has data for optional columns
@@ -705,7 +705,8 @@ export function WorktreeListPage({
         riskModalOpen={riskModalOpen}
         onRiskModalOpenChange={setRiskModalOpen}
         deleteRisk={deleteRisk}
-        riskConfirming={riskConfirming}
+        // No `riskConfirming`: this flow closes the dialog on confirm and
+        // reports progress inline on the row instead.
         onConfirmRiskDelete={() => performDelete()}
         onCancelRiskDelete={closeDeleteModals}
         errorModalOpen={errorModalOpen}

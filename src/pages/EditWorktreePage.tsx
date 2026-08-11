@@ -7,6 +7,7 @@ import { AlertModal } from '@/components/ui/alert-modal';
 import { useKeyboardShortcut } from '@/hooks/useKeyboardShortcut';
 import * as api from '@/lib/api';
 import type { WorktreeDeleteRisk } from '@/lib/api';
+import { describeDeleteRisk } from '@/lib/delete-risk-description';
 import type { Worktree } from '@/types';
 
 interface EditWorktreePageProps {
@@ -161,18 +162,7 @@ export function EditWorktreePage({ worktree, onBack, onSaved }: EditWorktreePage
 
   const isMainBranch = worktree.isMain;
 
-  const riskDescription = (() => {
-    const parts: string[] = [];
-    if (deleteRisk?.has_uncommitted_changes) parts.push('uncommitted changes');
-    if (deleteRisk && deleteRisk.unpushed_commits > 0) {
-      const n = deleteRisk.unpushed_commits;
-      parts.push(`${n} unpushed commit${n === 1 ? '' : 's'} on "${worktree.branch}"`);
-    }
-    const what = parts.length > 0 ? parts.join(' and ') : 'unsaved work';
-    return `This worktree has ${what} that exist nowhere else.\n\nDeleting will permanently discard ${
-      parts.length > 1 ? 'them' : 'it'
-    }. This cannot be undone.`;
-  })();
+  const riskDescription = describeDeleteRisk(worktree.branch, deleteRisk);
 
   return (
     <div className="h-full flex flex-col">

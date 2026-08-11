@@ -2,6 +2,7 @@ import { ConfirmModal } from '@/components/ui/confirm-modal';
 import { AlertModal } from '@/components/ui/alert-modal';
 import type { RunningServer, WorktreeDeleteRisk } from '@/lib/api';
 import type { WorktreeWithIntegrations } from '@/components/worktree/types';
+import { describeDeleteRisk } from '@/lib/delete-risk-description';
 
 interface DeleteModalData {
   worktree: WorktreeWithIntegrations;
@@ -31,7 +32,12 @@ interface DeleteWorktreeModalsProps {
   riskModalOpen: boolean;
   onRiskModalOpenChange: (open: boolean) => void;
   deleteRisk: WorktreeDeleteRisk | null;
-  riskConfirming: boolean;
+  /**
+   * Loading state for the risk dialog's confirm button. Only meaningful for
+   * callers that keep the dialog open while the delete runs; callers that close
+   * it immediately (and report progress elsewhere) can omit it.
+   */
+  riskConfirming?: boolean;
   onConfirmRiskDelete: () => void;
   onCancelRiskDelete: () => void;
 
@@ -113,23 +119,6 @@ function PrMergedNote({ data }: Pick<DeleteWorktreeModalsProps, 'data'>) {
   );
 }
 
-// Build the risk-warning body from what the delete would discard.
-function riskDescription(data: DeleteModalData | null, risk: WorktreeDeleteRisk | null): string {
-  const branch = data?.worktree.branch ?? 'this branch';
-  const parts: string[] = [];
-  if (risk?.has_uncommitted_changes) {
-    parts.push('uncommitted changes');
-  }
-  if (risk && risk.unpushed_commits > 0) {
-    const n = risk.unpushed_commits;
-    parts.push(`${n} unpushed commit${n === 1 ? '' : 's'} on "${branch}"`);
-  }
-  const what = parts.length > 0 ? parts.join(' and ') : 'unsaved work';
-  return `This worktree has ${what} that exist nowhere else.\n\nDeleting will permanently discard ${
-    parts.length > 1 ? 'them' : 'it'
-  }. This cannot be undone.`;
-}
-
 export function DeleteWorktreeModals({
   data,
   deleteBranchToo,
@@ -145,7 +134,7 @@ export function DeleteWorktreeModals({
   riskModalOpen,
   onRiskModalOpenChange,
   deleteRisk,
-  riskConfirming,
+  riskConfirming = false,
   onConfirmRiskDelete,
   onCancelRiskDelete,
   errorModalOpen,
@@ -190,7 +179,7 @@ export function DeleteWorktreeModals({
         open={riskModalOpen}
         onOpenChange={onRiskModalOpenChange}
         title="Delete worktree with unsaved work?"
-        description={riskDescription(data, deleteRisk)}
+        description={describeDeleteRisk(data?.worktree.branch, deleteRisk)}
         confirmLabel={deleteBranchToo ? 'Delete Anyway & Branch' : 'Delete Anyway'}
         variant="destructive"
         onConfirm={onConfirmRiskDelete}

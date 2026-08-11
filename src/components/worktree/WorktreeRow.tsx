@@ -162,6 +162,13 @@ export function WorktreeRow({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showActions]);
 
+  // Deletion hides the trigger button, so an already-open menu would be left
+  // floating with no way back to it — and every item acts on a directory that
+  // is disappearing. Close it as soon as the delete starts.
+  useEffect(() => {
+    if (isDeleting) setShowActions(false);
+  }, [isDeleting]);
+
   const handleRowClick = () => {
     // A row being deleted is inert — its directory is going away.
     if (!showActions && !isDeleting) {
@@ -297,7 +304,7 @@ export function WorktreeRow({
             <MoreHorizontal size={14} />
           </button>
         )}
-        {showActions && createPortal(
+        {showActions && !isDeleting && createPortal(
           <div
             ref={dropdownRef}
             className="worktree-actions-dropdown-portal"
