@@ -73,10 +73,16 @@ jobs:
       - name: Typecheck and build frontend
         run: pnpm build
 
-      # tauri-action builds, signs, notarizes and staples, then creates the
-      # GitHub release and uploads the .dmg / .app.tar.gz.
+      # Build + sign only — deliberately NO tagName/releaseName/releaseId, which
+      # is what tells tauri-action to skip creating a release and just build.
       #
-      # It creates and cleans up its own temporary keychain from
+      # Why not let it publish: tauri-action notarizes and staples the .app, then
+      # builds the .dmg around it and only SIGNS the dmg. If it uploaded here, the
+      # released asset would be an unnotarized dmg that Gatekeeper rejects with
+      # "source=Unnotarized Developer ID". So we notarize the dmg ourselves in the
+      # next step and publish afterwards, mirroring scripts/release-build.sh.
+      #
+      # It does create and clean up its own temporary keychain from
       # APPLE_CERTIFICATE — do NOT add manual `security create-keychain` steps.
       #
       # Required repository secrets:
@@ -86,10 +92,9 @@ jobs:
       #   APPLE_ID                   Apple Developer account email
       #   APPLE_PASSWORD             app-specific password (NOT the account password)
       #   APPLE_TEAM_ID              10-character Team ID
-      - name: Build, sign, notarize and publish
+      - name: Build and sign (no publish)
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -97,11 +102,78 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          # __VERSION__ is substituted by tauri-action from tauri.conf.json.
-          tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: v__VERSION__
-          # Published as a draft so the release notes and the attached .dmg can
-          # be reviewed before teammates see it.
-          draft: true
-          prerelease: false
           args: --target universal-apple-darwin
+
+      - name: Locate artifacts
+        id: artifacts
+        run: |
+          set -euo pipefail
+          BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
+          APP="$BUNDLE/macos/Worktree Manager.app"
+          DMG=$(find "$BUNDLE/dmg" -maxdepth 1 -name '*.dmg' | sort | head -1)
+          [[ -d "$APP" ]] || { echo "::error::.app not found at $APP"; exit 1; }
+          [[ -n "$DMG" ]] || { echo "::error::no .dmg found under $BUNDLE/dmg"; exit 1; }
+          echo "app=$APP"  >> "$GITHUB_OUTPUT"
+          echo "dmg=$DMG"  >> "$GITHUB_OUTPUT"
+          echo "Found: $APP"
+          echo "Found: $DMG"
+
+      # The step tauri-action does not do. Without this the released dmg is
+      # rejected by Gatekeeper even though the app inside it is notarized.
+      - name: Notarize and staple the .dmg
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          DMG="${{ steps.artifacts.outputs.dmg }}"
+          out=$(xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait 2>&1)
+          echo "$out"
+          grep -q "status: Accepted" <<<"$out" || {
+            echo "::error::dmg notarization did not reach Accepted"; exit 1; }
+          xcrun stapler staple "$DMG"
+
+      # Same gates as scripts/release-build.sh. codesign and stapler are hard
+      # failures; the spctl assessments are advisory because Gatekeeper
+      # assessment can behave differently on ephemeral CI runners, and a stapled
+      # ticket is already proof of notarization.
+      - name: Verify signature, notarization and architectures
+        run: |
+          set -uo pipefail
+          APP="${{ steps.artifacts.outputs.app }}"
+          DMG="${{ steps.artifacts.outputs.dmg }}"
+          rc=0
+          codesign --verify --deep --strict --verbose=2 "$APP" || rc=1
+          xcrun stapler validate "$APP" || rc=1
+          xcrun stapler validate "$DMG" || rc=1
+          BIN=$(plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")
+          archs=$(lipo -archs "$APP/Contents/MacOS/$BIN")
+          echo "archs: $archs"
+          [[ "$archs" == *x86_64* && "$archs" == *arm64* ]] || { echo "::error::not universal"; rc=1; }
+          spctl -a -t exec -vv "$APP" || echo "::warning::spctl assessment of .app was not 'accepted'"
+          spctl -a -t open --context context:primary-signature -vv "$DMG" \
+            || echo "::warning::spctl assessment of .dmg was not 'accepted'"
+          exit $rc
+
+      # Published as a draft so the notes and the attached dmg can be reviewed
+      # before teammates see it. Uses `gh` rather than tauri-action so the asset
+      # uploaded is the notarized-and-stapled dmg from the step above.
+      - name: Create draft GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag || github.ref_name }}"
+          DMG="${{ steps.artifacts.outputs.dmg }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists — uploading asset to it."
+            gh release upload "$TAG" "$DMG" --clobber
+          else
+            gh release create "$TAG" "$DMG" \
+              --draft --title "$TAG" --generate-notes
+          fi
+          gh release view "$TAG" --json isDraft,tagName,assets \
+            --jq '{tag:.tagName, draft:.isDraft, assets:[.assets[].name]}'

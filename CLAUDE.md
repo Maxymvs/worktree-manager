@@ -91,8 +91,11 @@ Three tiers:
   (template: `.env.signing.example`). `./scripts/signing-setup.sh` creates/imports
   the Developer ID certificate (no full Xcode needed).
 - **CI release** — pushing a `v*` tag runs `.github/workflows/release.yml`
-  (macos-14, `tauri-apps/tauri-action`), which signs, notarizes and creates a
-  **draft** GitHub release. Needs six repo secrets: `APPLE_CERTIFICATE`,
+  (macos-14). `tauri-apps/tauri-action` builds + signs only (no `tagName`, so it
+  does not publish); the workflow then notarizes/staples the `.dmg`, verifies,
+  and creates a **draft** release via `gh`. Notarizing the dmg *before* upload
+  matters: tauri-action only signs it, and an unnotarized dmg fails Gatekeeper.
+  Needs six repo secrets: `APPLE_CERTIFICATE`,
   `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
   `APPLE_PASSWORD`, `APPLE_TEAM_ID`.
 

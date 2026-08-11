@@ -146,8 +146,18 @@ lipo -archs "$APP/Contents/MacOS/Worktree Manager"   # -> x86_64 arm64
 
 ## 3. CI releases (GitHub Actions)
 
-`.github/workflows/release.yml` runs on `macos-14`, builds the universal
-bundle, signs and notarizes it, and creates a **draft** GitHub release.
+`.github/workflows/release.yml` runs on `macos-14` and mirrors what
+`scripts/release-build.sh` does locally: build universal → sign → notarize and
+staple **both** the `.app` and the `.dmg` → verify → create a **draft** GitHub
+release with the `.dmg` attached.
+
+It uses `tauri-apps/tauri-action` only to build and sign, deliberately passing
+no `tagName`/`releaseName` (which is what makes the action skip publishing).
+The release is then created with `gh` in a later step. That ordering is the
+point: tauri-action notarizes the `.app` but only *signs* the `.dmg`, so if it
+published directly the released asset would be an unnotarized disk image that
+Gatekeeper rejects with `source=Unnotarized Developer ID`. Notarizing the dmg
+must happen before the upload, not after.
 
 CI has no keychain, so it needs the certificate itself as a base64 secret.
 
