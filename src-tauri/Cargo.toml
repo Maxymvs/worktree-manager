@@ -39,7 +39,13 @@ tauri-plugin-deep-link = "2"
 arboard = "3"
 
 # Git operations (Phase 4)
-git2 = "0.19"
+# default-features = false drops git2's `ssh` + `https` features, which pull in
+# libssh2-sys -> openssl-sys. We only use git2 for local repo reads
+# (Repository::open, branches, head) — every network operation shells out to the
+# `git` CLI instead. Keeping OpenSSL would break the universal build: Homebrew's
+# OpenSSL is arm64-only, so the x86_64 half fails with "Could not find openssl
+# via pkg-config: pkg-config has not been configured to support cross-compilation".
+git2 = { version = "0.19", default-features = false }
 
 # HTTP client for GitHub/Jira (Phase 5, 6)
 reqwest = { version = "0.12", features = ["json"] }

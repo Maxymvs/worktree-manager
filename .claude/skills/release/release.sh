@@ -82,7 +82,18 @@ VERSION=$(echo "$LAST_COMMIT" | sed 's/chore: bump version to //')
 echo -e "${GREEN}✓${NC} Version bump found: $VERSION"
 
 # Check 2: Build artifacts should exist
-DMG_CHECK=$(ls src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
+# Prefer the universal build (scripts/release-build.sh), fall back to the
+# plain host-target build (pnpm tauri build).
+find_dmg() {
+  local dmg
+  dmg=$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
+  if [[ -z "$dmg" ]]; then
+    dmg=$(ls src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
+  fi
+  echo "$dmg"
+}
+
+DMG_CHECK=$(find_dmg)
 if [[ -z "$DMG_CHECK" ]]; then
   echo -e "${RED}✗ Build artifacts not found${NC}"
   echo ""
@@ -113,7 +124,7 @@ if git rev-parse "v$VERSION" >/dev/null 2>&1; then
 fi
 
 # Find artifacts
-DMG_FILE=$(ls src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
+DMG_FILE=$(find_dmg)
 
 echo ""
 echo "Artifacts to upload:"

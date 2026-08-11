@@ -25,11 +25,18 @@ dist-ssr
 
 # Tauri
 src-tauri/target/
-src-tauri/Cargo.lock
+# NOTE: src-tauri/Cargo.lock is intentionally tracked. This is a binary, not a
+# library, and the release workflow must resolve the exact same crate versions
+# every build — otherwise a breaking transitive update fails a release at random.
 
 # Build artifacts
 *.dmg
 *.app.zip
+
+# Code signing
+.env.signing
+signing/
+*.p12
 
 # Test
 test-results/

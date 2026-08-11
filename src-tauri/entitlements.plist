@@ -10,7 +10,7 @@
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
 
-    <!-- Network access for auto-update -->
+    <!-- Network access for the GitHub / Jira integration API calls -->
     <key>com.apple.security.network.client</key>
     <true/>
 
@@ -18,10 +18,11 @@
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
 
-    <!-- Keychain access for secure token storage -->
-    <key>com.apple.security.keychain-access-groups</key>
-    <array>
-        <string>$(AppIdentifierPrefix)com.grovr.desktop</string>
-    </array>
+    <!--
+      No keychain-access-groups entitlement: the app is not sandboxed, so the
+      `keyring` crate reaches the login keychain without one. The old
+      $(AppIdentifierPrefix) value was an Xcode build-setting placeholder that
+      codesign does not substitute, so signing would embed a literal invalid group.
+    -->
 </dict>
 </plist>

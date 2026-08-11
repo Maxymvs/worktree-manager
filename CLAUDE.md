@@ -82,13 +82,28 @@ pnpm test:critical    # Critical path
 
 ## Distribution & updates
 
+Three tiers:
+
+- **Local dev install** — `./scripts/install-local.sh`: ad-hoc signed, copies
+  `Worktree Manager.app` to `/Applications`. Maintainer machine only.
+- **Local release** — `./scripts/release-build.sh`: signed + notarized universal
+  `.dmg`. Credentials are env-driven, sourced from a gitignored `.env.signing`
+  (template: `.env.signing.example`). `./scripts/signing-setup.sh` creates/imports
+  the Developer ID certificate (no full Xcode needed).
+- **CI release** — pushing a `v*` tag runs `.github/workflows/release.yml`
+  (macos-14, `tauri-apps/tauri-action`), which signs, notarizes and creates a
+  **draft** GitHub release. Needs six repo secrets: `APPLE_CERTIFICATE`,
+  `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
+  `APPLE_PASSWORD`, `APPLE_TEAM_ID`.
+
+Notes:
+
+- Release builds are universal (`--target universal-apple-darwin`), so artifacts
+  land in `src-tauri/target/universal-apple-darwin/release/bundle/{macos,dmg}/`
+  — **not** `src-tauri/target/release/bundle/`.
 - **No auto-updater.** The Tauri updater was removed (it pointed at the upstream
-  author's signed releases). There is no in-app update mechanism.
-- **Personal install**: `./scripts/install-local.sh` builds a release bundle and
-  copies `Worktree Manager.app` to `/Applications` (ad-hoc signed — fine for local
-  use, no Apple Developer ID needed). Re-run it to update.
-- The `/bump` and `/release` skills still exist but ship the `.dmg` only (no
-  `latest.json` / Homebrew cask).
+  author's signed releases). Updating means downloading a new `.dmg`.
+- Full procedure (Apple setup, secrets, troubleshooting): `docs/DISTRIBUTION.md`.
 
 ## Core Principles
 
@@ -142,6 +157,13 @@ are tolerated (parse stdout regardless). The frontend polls every 4s via
 `useServerPolling` (paused when the window is hidden), and `WorktreeRow` renders
 clickable port badges with a Radix hover card (process, pid, uptime, bind scope,
 URL). macOS-only; degrades gracefully elsewhere (errors swallowed, prior state kept).
+
+`stop_worktree_processes(worktree_path)` (same module) is the companion write
+side: it finds every process whose cwd is inside the worktree (same cwd-matching
+as detection, so it also catches watchers/build steps that don't listen on a
+port), SIGTERMs them, then SIGKILLs stragglers. The delete flow calls it before
+`remove_worktree` when the user opts in, so a running dev server can't leave the
+worktree in the "Directory not empty" half-deleted state.
 
 ## Key Files
 

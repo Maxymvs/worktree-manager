@@ -1,0 +1,107 @@
+# Release: build, sign, notarize and publish a universal macOS .dmg.
+#
+# Triggered by pushing a `v*` tag (e.g. `v0.8.0`), which is what `/bump` +
+# `git push --tags` produces. Can also be run manually from the Actions tab.
+#
+# macOS-only by design: the app shells out to `lsof`/`ps` for dev-server
+# detection and uses window-vibrancy, so there is no Linux/Windows matrix.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and publish (e.g. v0.8.0). Must already exist."
+        required: false
+        type: string
+
+# Only what is needed to create the GitHub release and upload its assets.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: macOS universal release
+    # macos-14 is an Apple Silicon runner; it cross-compiles the x86_64 half of
+    # the universal binary via the extra rustup target below.
+    runs-on: macos-14
+    # Rust release build + notarization (Apple's service queue is 5-15 min)
+    # comfortably fits in an hour; anything longer means something is wedged.
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # For workflow_dispatch, allow building an explicit existing tag.
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # Vite 7 requires ^20.19.0 || >=22.12.0.
+          node-version: 22
+          cache: pnpm
+
+      # Both targets are required: tauri-action's `--target
+      # universal-apple-darwin` builds each arch and `lipo`s them together, so
+      # a single .dmg runs natively on Intel and Apple Silicon Macs.
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Typecheck gate: `pnpm build` is tsc (strict) + vite and takes ~1 minute.
+      # Running it before the Rust build means a type error fails fast instead
+      # of after a ~40 minute cargo release build.
+      - name: Typecheck and build frontend
+        run: pnpm build
+
+      # tauri-action builds, signs, notarizes and staples, then creates the
+      # GitHub release and uploads the .dmg / .app.tar.gz.
+      #
+      # It creates and cleans up its own temporary keychain from
+      # APPLE_CERTIFICATE — do NOT add manual `security create-keychain` steps.
+      #
+      # Required repository secrets:
+      #   APPLE_CERTIFICATE          base64 of the Developer ID Application .p12
+      #   APPLE_CERTIFICATE_PASSWORD password used when exporting that .p12
+      #   APPLE_SIGNING_IDENTITY     e.g. "Developer ID Application: Name (TEAMID)"
+      #   APPLE_ID                   Apple Developer account email
+      #   APPLE_PASSWORD             app-specific password (NOT the account password)
+      #   APPLE_TEAM_ID              10-character Team ID
+      - name: Build, sign, notarize and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          # __VERSION__ is substituted by tauri-action from tauri.conf.json.
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: v__VERSION__
+          # Published as a draft so the release notes and the attached .dmg can
+          # be reviewed before teammates see it.
+          draft: true
+          prerelease: false
+          args: --target universal-apple-darwin
