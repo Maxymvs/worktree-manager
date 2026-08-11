@@ -3,6 +3,7 @@
   "productName": "Worktree Manager",
   "version": "0.8.0",
   "identifier": "com.grovr.desktop",
+  "mainBinaryName": "Worktree Manager",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
