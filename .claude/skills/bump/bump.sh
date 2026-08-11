@@ -105,7 +105,11 @@ fi
 echo ""
 echo "Creating commit..."
 
-git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+# Cargo.lock records grovr's own version, so the build rewrites it on every
+# bump. It is tracked (release builds must be reproducible), so it has to go in
+# the same commit — otherwise the tree is left dirty and the next bump fails its
+# own clean-tree precondition.
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
 git commit -m "chore: bump version to $VERSION"
 
 # === Summary ===
